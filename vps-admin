@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+python_bin=''
+for candidate in /usr/bin/python3 /usr/local/bin/python3 /opt/homebrew/bin/python3; do
+  if [[ -x "$candidate" && -f "$candidate" ]]; then
+    python_bin=$candidate
+    break
+  fi
+done
+if [[ -z "$python_bin" ]]; then
+  printf '%s\n' '需要 Python 3。当前原型不会自动安装依赖或修改系统。' >&2
+  exit 1
+fi
+
+script_path=${BASH_SOURCE[0]}
+case "$script_path" in
+  */*) script_dir=${script_path%/*}; [[ -n "$script_dir" ]] || script_dir=/ ;;
+  *) script_dir=. ;;
+esac
+project_dir=$(CDPATH= cd -- "$script_dir" && pwd -P)
+# 隔离 Python 环境与当前工作目录，避免以 root 运行时加载同名的非项目代码。
+exec "$python_bin" -I -B -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from vps_admin.cli import main; raise SystemExit(main())' "$project_dir/src" "$@"

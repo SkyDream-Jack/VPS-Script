@@ -1,0 +1,54 @@
+name: Read-only checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ubuntu:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-26.04, ubuntu-24.04-arm, ubuntu-26.04-arm]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check shell syntax
+        run: |
+          bash -n vps-admin
+          bash -n install-local.sh
+      - name: Run unit tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+      - name: Check Linux system overview
+        run: ./vps-admin status system
+
+  debian:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["python:3.11-slim-bookworm", "python:3.13-slim-trixie"]
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check shell syntax
+        run: |
+          bash -n vps-admin
+          bash -n install-local.sh
+      - name: Run unit tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+      - name: Check Linux system overview
+        run: ./vps-admin status system
