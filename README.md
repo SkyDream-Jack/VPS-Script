@@ -2,7 +2,7 @@
 
 面向 Ubuntu / Debian 新 VPS 的初始化与日常管理面板。在 SSH 终端里按需选择功能，执行前显示影响，执行后给出只读状态；默认只读，修改需要显式启用。
 
-当前版本：**v0.3.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
+当前版本：**v0.4.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
 
 ## 一键安装 / 升级
 
@@ -32,6 +32,7 @@ vps-script status       # 全部只读状态
 | 系统软件 | APT 索引更新、升级、基础/网络/监控/安全工具安装 | `status packages` |
 | 3x-ui | 检测现有安装、固定版本安装、读取面板端口/路径（不读密码） | `status panel` |
 | BBR / fq | 检查、启用、恢复；记录原值；需要时写入 `tcp_bbr` 开机加载 | `status bbr` |
+| 内核网络调优 | 保守 / 代理中转 / 大带宽缓冲三档，动态缓冲区、冲突检测、回滚、可选 TCP Fast Open | `status tuning` |
 | SSH | 新增端口、关闭项目旧端口、仅公钥认证、放行 UFW 新端口 | `status ssh` |
 | UFW | 查看规则、允许/删除端口、带 180 秒超时恢复的首次启用 | `status ufw` |
 | Fail2ban | 查看 jail/封禁计数、创建项目 SSH jail、SSH 端口变化后刷新、解封 IP | `status fail2ban` |
@@ -39,10 +40,11 @@ vps-script status       # 全部只读状态
 | 常用工具 | swap 创建/移除、时区查看/设置、DNS 只读查看 | `status swap`、`status timezone`、`status dns` |
 | 状态查询 | 单项/分组/全部状态，支持 JSON | `status --json` |
 
-状态分组别名：`network` = BBR + Hy2，`security` = SSH + UFW + Fail2ban，`common` = swap + 时区 + DNS。
+状态分组别名：`network` = BBR + 内核调优 + Hy2，`security` = SSH + UFW + Fail2ban，`common` = swap + 时区 + DNS。
 
 ```bash
 vps-script status security
+vps-script status tuning
 vps-script status --json > /tmp/vps-status.json
 vps-script doctor
 ```
@@ -58,6 +60,7 @@ vps-script doctor
 - Hy2 只管理项目专属 NAT 表，不修改云防火墙；必须在云厂商控制台放行 UDP 跳跃范围和目标端口，并从外部网络实测客户端。
 - 3x-ui 安装脚本以 root 运行且会访问 GitHub/APT/公网 IP 查询服务；项目固定了版本和入口摘要，但上游包和可选证书步骤仍有各自信任边界。
 - swap 只管理 `/swapfile-vps-script` 和带标记的 fstab 行；已有其他 swap 时停止。
+- 内核网络调优只改项目 sysctl 文件，不代表实际提速；参数效果需同机、同对端 A/B 测试。不做 qdisc 整形、不改内核、不自动 RPS/MSS/DNS。
 - 软件包升级、3x-ui 安装、内核/服务重启无法保证完整回滚；重要机器请先快照。
 
 ## 本地开发
@@ -76,4 +79,4 @@ bash install-local.sh
 bash install-local.sh --upgrade
 ```
 
-详细设计、验证清单和审查记录见 [项目计划](docs/PLAN.md)、[开发说明](docs/DEVELOPMENT.md)、[测试计划](docs/TESTING.md) 和 [审查与改进记录](docs/REVIEW.md)。
+详细设计、验证清单和审查记录见 [项目计划](docs/PLAN.md)、[开发说明](docs/DEVELOPMENT.md)、[测试计划](docs/TESTING.md) 和 [审查与改进记录](docs/REVIEW.md) 和 [优化调研与计划](docs/OPTIMIZATION.md)。

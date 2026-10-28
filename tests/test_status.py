@@ -13,7 +13,7 @@ from vps_admin import cli, status
 class StatusTest(unittest.TestCase):
     def test_aliases_and_all_sections(self):
         self.assertEqual(status.names_for("security"), ("ssh", "ufw", "fail2ban"))
-        self.assertEqual(status.names_for("network"), ("bbr", "hy2"))
+        self.assertEqual(status.names_for("network"), ("bbr", "tuning", "hy2"))
         self.assertEqual(set(status.names_for("all")), set(status.SECTIONS))
 
     def test_collect_is_json_serializable_and_has_stable_shape(self):

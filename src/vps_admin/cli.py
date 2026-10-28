@@ -5,7 +5,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, bbr, checks, common, fail2ban, firewall, hy2, packages, panel, ssh, status, swap
+from . import __version__, bbr, checks, common, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
 
 REPORTS = {
     "system": ("系统概览", checks.system_report),
@@ -315,10 +315,58 @@ def common_menu(demo: bool = False, experimental: bool = False) -> None:
             print("无效选择，请重试。")
 
 
+def tuning_menu(demo: bool = False, experimental: bool = False) -> None:
+    while True:
+        print("\nVPS 优化 · 内核网络调优（试验功能）")
+        print("1. 查看当前调优状态\n2. 应用保守档（通用 Web / 面板）\n3. 应用代理 / 中转档")
+        print("4. 应用大带宽缓冲档（按预期带宽/RTT 估算）\n5. 代理档 + TCP Fast Open\n6. 恢复本项目调优")
+        print("0. 返回")
+        try:
+            choice = input("请选择：").strip()
+        except EOFError:
+            print("\n输入结束。")
+            return
+        if choice in ("0", "q", "Q"):
+            return
+        if choice == "1":
+            _demo_status("tuning") if demo else show_status("tuning")
+            continue
+        if demo:
+            print("【演示】不会修改内核网络参数。")
+            continue
+        if choice in ("2", "3", "4", "5", "6") and not _require_modify(experimental):
+            continue
+        try:
+            if choice == "2":
+                result = tuning.change("conservative", experimental=experimental)
+            elif choice == "3":
+                result = tuning.change("proxy", experimental=experimental)
+            elif choice == "4":
+                text = input("预期带宽 Mbps（留空按内存估算）：").strip()
+                bandwidth = int(text) if text else None
+                rtt_text = input("预期 RTT ms（默认 200）：").strip()
+                rtt = int(rtt_text) if rtt_text else 200
+                result = tuning.change("buffer", bandwidth_mbps=bandwidth, rtt_ms=rtt,
+                                       experimental=experimental)
+            elif choice == "5":
+                result = tuning.change("proxy", fastopen=True, experimental=experimental)
+            elif choice == "6":
+                result = tuning.change(restore=True, experimental=experimental)
+            else:
+                print("无效选择，请重试。")
+                continue
+            if result == 0:
+                show_status("tuning")
+        except (EOFError, ValueError):
+            print("输入无效，已取消。")
+        except (tuning.TuningFailure, bbr.BBRFailure, OSError) as exc:
+            print(f"操作未完成：{exc}")
+
+
 def status_menu(demo: bool = False) -> None:
     while True:
         print("\n状态查询（只读）")
-        print("1. 全部状态\n2. 系统概览\n3. 软件与重启\n4. 3x-ui\n5. BBR / fq\n6. SSH\n7. UFW\n8. Fail2ban\n9. Hy2\n10. Swap / 时区 / DNS\n0. 返回")
+        print("1. 全部状态\n2. 系统概览\n3. 软件与重启\n4. 3x-ui\n5. BBR / fq\n6. SSH\n7. UFW\n8. Fail2ban\n9. Hy2\n10. Swap / 时区 / DNS\n11. 内核网络调优\n0. 返回")
         try:
             choice = input("请选择：").strip()
         except EOFError:
@@ -328,7 +376,7 @@ def status_menu(demo: bool = False) -> None:
             return
         mapping = {
             "1": "all", "2": "system", "3": "packages", "4": "panel", "5": "bbr",
-            "6": "ssh", "7": "ufw", "8": "fail2ban", "9": "hy2", "10": "common",
+            "6": "ssh", "7": "ufw", "8": "fail2ban", "9": "hy2", "10": "common", "11": "tuning",
         }
         name = mapping.get(choice)
         if not name:
@@ -376,9 +424,9 @@ def menu(demo: bool = False, experimental: bool = False) -> int:
         else:
             print("【只读模式：不会修改系统】")
         print("1. 系统概览\n2. 网络设置\n3. SSH 与安全\n4. 3x-ui 管理\n5. 系统软件（试验功能）")
-        print("6. 常用工具\n7. 状态查询（只读）\n8. 工具维护")
+        print("6. 常用工具\n7. 状态查询（只读）\n8. 工具维护\n9. VPS 优化（内核网络调优）")
         if not modify:
-            print("9. 启用修改模式")
+            print("10. 启用修改模式")
         print("0. 退出")
         try:
             choice = input("请选择：").strip()
@@ -403,8 +451,10 @@ def menu(demo: bool = False, experimental: bool = False) -> int:
             status_menu(demo=demo)
         elif choice == "8":
             maintenance_menu()
-        elif choice == "9" and not modify and not demo:
-            print("修改模式会启用 APT、3x-ui、BBR、SSH、UFW、Fail2ban、Hy2、swap 和时区变更。")
+        elif choice == "9":
+            tuning_menu(demo=demo, experimental=modify)
+        elif choice == "10" and not modify and not demo:
+            print("修改模式会启用 APT、3x-ui、BBR、内核调优、SSH、UFW、Fail2ban、Hy2、swap 和时区变更。")
             print("每项操作仍需单独确认；请确保有服务商控制台和备份。")
             if input("输入 ENABLE 启用，其他内容取消：").strip() == "ENABLE":
                 modify = True

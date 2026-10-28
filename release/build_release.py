@@ -12,12 +12,12 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION_RE = re.compile(r"^v[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-[A-Za-z0-9.-]{1,32})?$")
 FILES = (
     "README.md", "vps-admin", "install-local.sh", "bootstrap.py",
-    "docs/PLAN.md", "docs/DEVELOPMENT.md", "docs/3X-UI-AUDIT.md", "docs/INSTALLATION.md", "docs/TESTING.md", "docs/REVIEW.md",
+    "docs/PLAN.md", "docs/DEVELOPMENT.md", "docs/3X-UI-AUDIT.md", "docs/INSTALLATION.md", "docs/TESTING.md", "docs/REVIEW.md", "docs/OPTIMIZATION.md",
     "src/vps_admin/__init__.py", "src/vps_admin/__main__.py", "src/vps_admin/checks.py", "src/vps_admin/cli.py",
     "src/vps_admin/packages.py", "src/vps_admin/panel.py", "src/vps_admin/bbr.py", "src/vps_admin/hy2.py",
     "src/vps_admin/firewall.py", "src/vps_admin/ufw_rollback.py", "src/vps_admin/fail2ban.py",
     "src/vps_admin/ssh.py", "src/vps_admin/ssh_rollback.py", "src/vps_admin/status.py",
-    "src/vps_admin/swap.py", "src/vps_admin/common.py",
+    "src/vps_admin/swap.py", "src/vps_admin/common.py", "src/vps_admin/tuning.py",
 )
 EXECUTABLE = frozenset({"vps-admin", "install-local.sh", "bootstrap.py"})
 

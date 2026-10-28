@@ -12,13 +12,14 @@ import platform
 import re
 import shutil
 
-from . import bbr, checks, common, fail2ban, hy2, packages, panel, swap
+from . import bbr, checks, common, fail2ban, hy2, packages, panel, swap, tuning
 
 SECTIONS = {
     "system": "系统概览",
     "packages": "系统更新与软件",
     "panel": "3x-ui 面板",
     "bbr": "BBR / fq",
+    "tuning": "内核网络调优",
     "ssh": "SSH 登录",
     "ufw": "UFW 防火墙",
     "fail2ban": "Fail2ban",
@@ -28,7 +29,7 @@ SECTIONS = {
     "dns": "DNS",
 }
 ALIASES = {
-    "network": ("bbr", "hy2"),
+    "network": ("bbr", "tuning", "hy2"),
     "security": ("ssh", "ufw", "fail2ban"),
     "common": ("swap", "timezone", "dns"),
 }
@@ -226,6 +227,60 @@ def _parse_effective(text):
         if len(fields) == 2:
             values.setdefault(fields[0].lower(), []).append(fields[1].strip())
     return values
+
+
+def _tuning():
+    try:
+        info = tuning.TuningManager().inspect()
+    except (tuning.TuningFailure, bbr.BBRFailure, OSError) as exc:
+        return {"name": "tuning", "title": SECTIONS["tuning"], "facts": {}, "items": [_item("调优", "unknown", str(exc))]}
+    values = info["values"]
+    state = info["state"]
+    facts = {
+        "档位": tuning.PROFILE_TITLES.get(state.get("profile"), "未应用") if state and not state.get("invalid") else "未应用或状态无效",
+        "项目配置": "存在" if info["config_exists"] else "不存在",
+        "状态文件": "存在" if state else "不存在",
+        "配置内容": "匹配" if info["config_matches"] else ("未知" if info["config_exists"] else "不存在"),
+        "内存": f"{tuning.read_ram_kb() // 1024} MiB",
+    }
+    labels = {
+        "somaxconn": "net.core.somaxconn",
+        "tcp_max_syn_backlog": "net.ipv4.tcp_max_syn_backlog",
+        "ip_local_port_range": "net.ipv4.ip_local_port_range",
+        "tcp_tw_reuse": "net.ipv4.tcp_tw_reuse",
+        "tcp_fastopen": "net.ipv4.tcp_fastopen",
+        "tcp_slow_start_after_idle": "net.ipv4.tcp_slow_start_after_idle",
+        "tcp_notsent_lowat": "net.ipv4.tcp_notsent_lowat",
+        "rmem_max": "net.core.rmem_max",
+        "wmem_max": "net.core.wmem_max",
+        "tcp_rmem": "net.ipv4.tcp_rmem",
+        "tcp_wmem": "net.ipv4.tcp_wmem",
+        "tcp_mem": "net.ipv4.tcp_mem",
+        "nf_conntrack_max": "net.netfilter.nf_conntrack_max",
+    }
+    for label, key in labels.items():
+        value = values.get(key)
+        facts[label] = value if value else "未知/未加载"
+    items = []
+    if state and state.get("invalid"):
+        items.append(_item("项目调优", "warn", "状态文件无法解析；不会自动恢复。"))
+    elif state:
+        items.append(_item("项目调优", "ok", f"已应用 {len(state['target'])} 项，档位 {tuning.PROFILE_TITLES.get(state['profile'], state['profile'])}。"))
+        if not info["config_matches"]:
+            items.append(_item("配置一致性", "warn", "项目配置文件缺失或被外部修改；恢复会停止。"))
+        if state.get("skipped"):
+            items.append(_item("跳过的参数", "info", "、".join(state["skipped"])))
+    else:
+        items.append(_item("项目调优", "info", "尚未应用；系统使用当前内核/发行版默认值。"))
+    if values.get("net.ipv4.tcp_tw_reuse") == "1" and values.get("net.ipv4.tcp_timestamps") != "1":
+        items.append(_item("tcp_tw_reuse", "warn", "已开启 reuse，但 timestamps 不是 1；这种组合不安全。"))
+    if values.get("net.ipv4.tcp_fastopen") == "3":
+        items.append(_item("TCP Fast Open", "info", "已开启（客户端+服务端）；实际可用性取决于应用和中间设备。"))
+    if not values.get("net.netfilter.nf_conntrack_max"):
+        items.append(_item("Conntrack", "info", "未加载或不可读；不会设置 conntrack 上限。"))
+    items.append(_item("BBR / qdisc", "info", "由 BBR 模块单独管理；本模块不改 tcp_congestion_control 和 default_qdisc。"))
+    items.append(_item("性能结论", "info", "参数写入不等于实际提速；需同机、同对端 A/B 测试。"))
+    return {"name": "tuning", "title": SECTIONS["tuning"], "facts": facts, "items": items}
 
 
 def _ssh():
@@ -469,6 +524,7 @@ _COLLECTORS = {
     "packages": _packages,
     "panel": _panel,
     "bbr": _bbr,
+    "tuning": _tuning,
     "ssh": _ssh,
     "ufw": _ufw,
     "fail2ban": _fail2ban,

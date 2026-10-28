@@ -2,6 +2,8 @@
 
 审查日期：2026-10-28。对象：本地 `VPS-Script` v0.2.1-dev 原型及 GitHub `SkyDream-Jack/VPS-Script` 远端。
 
+> v0.4.0-dev 追加：在 v0.3.0-dev 基础上增加内核网络调优（保守/代理/缓冲三档）、动态缓冲区、冲突检测/回滚和 `status tuning`。调研与取舍见 [OPTIMIZATION.md](OPTIMIZATION.md)。改动前已建立标签 `backup/pre-tuning-2026-10-28` 和本地备份包。
+
 ## 结论
 
 原型的模块划分、固定命令白名单、root/交互终端前置检查、文件身份校验和超时回滚方向是正确的，测试也覆盖了不少失败路径。主要问题不在“功能列表不够长”，而在**可用性闭环**：

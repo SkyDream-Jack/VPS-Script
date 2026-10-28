@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.4.0-dev — 2026-10-28
+
+### Added
+
+- 内核网络调优模块 `tuning.py`：保守 / 代理中转 / 大带宽缓冲三档。
+- 动态缓冲区：按内存和用户输入的预期带宽/RTT 估算 `tcp_rmem`/`tcp_wmem`/`tcp_mem`，不套固定值。
+- 冲突检测、项目专属 sysctl 文件、状态文件、失败回滚、外部修改后拒绝恢复。
+- 可选 TCP Fast Open；conntrack 已存在时按内存设置 `nf_conntrack_max`。
+- `status tuning`、主菜单“VPS 优化”、执行后状态回显。
+- `docs/OPTIMIZATION.md`：tcpfit / vps-netpilot / TCP-Optimize / kejilion 等调研与取舍。
+- 备份标签 `backup/pre-tuning-2026-10-28`。
+
+### Changed
+
+- 版本升至 `0.4.0-dev`。
+- `status network` 现在包含 BBR、内核调优和 Hy2。
+- README/PLAN/DEVELOPMENT/TESTING/INSTALLATION 更新。
+
+### Not included
+
+- qdisc/HTB 整形、initcwnd、RPS/RFS、MSS Clamp、DNS 切换、内核替换（BBRv3/XanMod/锐速）。
+- 真实 VPS A/B 性能数据；当前不宣称“加速”。
+
 ## v0.3.0-dev — 2026-10-28
 
 ### Added

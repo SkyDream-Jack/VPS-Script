@@ -1,18 +1,18 @@
 # VPS 初始化与管理项目计划
 
-> 状态：v0.3.0-dev 开发原型。这里描述目标与验收条件，不代表所有功能已经通过真实 VPS 验证。
+> 状态：v0.4.0-dev 开发原型。这里描述目标与验收条件，不代表所有功能已经通过真实 VPS 验证。
 
-## 0. 当前实现（v0.3.0-dev）
+## 0. 当前实现（v0.4.0-dev）
 
 首版仍是 **SSH 终端面板**，不是 3x-ui 那样的 Web 面板；两者相互独立。当前已具备：
 
-- 结构化只读状态：`status system|packages|panel|bbr|ssh|ufw|fail2ban|hy2|swap|timezone|dns|all`，支持 `--json`。
-- 模块化操作：APT、固定版本 3x-ui、BBR/fq（含模块持久化）、SSH 端口/公钥、UFW、Fail2ban、Hy2 nftables 转发、swap、时区。
+- 结构化只读状态：`status system|packages|panel|bbr|tuning|ssh|ufw|fail2ban|hy2|swap|timezone|dns|all`，支持 `--json`。
+- 模块化操作：APT、固定版本 3x-ui、BBR/fq（含模块持久化）、内核网络调优（保守/代理/缓冲档）、SSH 端口/公钥、UFW、Fail2ban、Hy2 nftables 转发、swap、时区。
 - 执行后自动显示对应只读状态；修改入口与只读入口分离，默认只读。
 - 短安装入口、固定摘要和 `--upgrade` 升级；程序目录与系统配置分离。
-- 审查记录见 [REVIEW.md](REVIEW.md)。
+- 审查记录见 [REVIEW.md](REVIEW.md)，优化调研与计划见 [OPTIMIZATION.md](OPTIMIZATION.md)。
 
-尚未完成：真实 VPS 端到端验收、UFW 与 Fail2ban 在更多组合下的自动排序、3x-ui 更新/卸载、证书自动签发、Web 管理界面、批量机器管理。
+尚未完成：真实 VPS 端到端验收、UFW 与 Fail2ban 在更多组合下的自动排序、3x-ui 更新/卸载、证书自动签发、Web 管理界面、批量机器管理。内核调优尚未做 A/B 性能验证。
 
 ## 1. 目标与边界
 
@@ -51,6 +51,7 @@ VPS 管理菜单                            状态按实际检查显示
 | 软件更新 | 检查软件源、更新软件索引、选择升级和安装常用工具 | 系统发行版、包管理器、命令结果、是否需要重启；不默认替换软件源 |
 | 3x-ui | 检查已有安装；可选安装、更新及查看服务状态 | 官方来源和版本、服务状态、监听端口；保留现有数据库与配置 |
 | BBR / fq | 检查支持情况、预览并有选择地修改配置、查看实际值 | 内核 TCP 拥塞控制、默认 qdisc 和相关接口的实际队列；与 Hy2 自身的拥塞控制分开 |
+| 内核网络调优 | 保守/代理/缓冲三档，动态缓冲区，冲突检测与恢复，可选 TCP Fast Open | 实际 sysctl 值、项目配置/状态文件、内存与 conntrack；不以参数写入宣称提速 |
 | SSH 安全 | 查看有效配置、分步修改 SSH 端口与身份验证方式 | 连接账户、实际监听端口、`sshd` 有效配置、服务或 socket 状态；不能仅凭公钥文件存在就判定可登录 |
 | UFW | 检查当前防火墙和必需端口，再按需启用或增删工具管理的规则 | UFW 状态、IPv4 / IPv6、SSH 和业务端口；服务商防火墙需要另外检查 |
 | Fail2ban | 按需安装和配置 SSH 防护，保留现有规则 | 服务、SSH jail、日志后端及封禁状态；配置和 UFW 分别检查 |
