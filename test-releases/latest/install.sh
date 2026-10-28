@@ -3,7 +3,7 @@ set -euo pipefail
 
 VERSION='v0.3.0-dev'
 BOOTSTRAP_SHA='8b8f2e17313f23c4f7160c5241476cc4ca15f69925e89d8d037de5e02e4dffd1'
-ARCHIVE_SHA='ad9eb436b4b4263a192590228dfe9683a4438b4dd06ebc13294c2091622c84fb'
+ARCHIVE_SHA='5935e90bbb6bb4f6287ce8164cc1e9193d5c9a2b3dd073c5cf686b169a09b775'
 BASE='https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.3.0-dev'
 
 if [[ $(uname -s) != Linux ]]; then

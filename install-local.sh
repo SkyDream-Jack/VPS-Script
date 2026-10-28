@@ -98,6 +98,12 @@ secure_dir() {
   return 0
 }
 
+if [[ ! -e /opt && ! -L /opt ]]; then
+  if ! mkdir -m 0755 /opt; then
+    printf '%s\n' '无法创建 /opt，已停止。' >&2
+    exit 2
+  fi
+fi
 if ! secure_dir /opt; then
   printf '%s\n' '/opt 不存在、不是普通目录、不是 root 所有或可被其他用户写入，已停止。' >&2
   exit 2

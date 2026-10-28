@@ -36,6 +36,10 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         timeout-minutes: 5
         run: |
+          # 让安装器在干净的 root:root 目录上测试；真实 VPS 的目录检查仍由安装器执行。
+          sudo mkdir -p /opt
+          sudo chown root:root /opt /usr/local/bin
+          sudo chmod 755 /opt /usr/local/bin
           installer=$(mktemp)
           trap 'rm -f "$installer"' EXIT
           python3 - "$installer" <<'PY'
