@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.0-dev — 2026-10-28
+
+### Added
+
+- 测试与体检菜单：机器/系统信息、网络接口/DNS/ICMP 延迟、mtr/traceroute 线路、Cloudflare 单线程下载带宽测试。
+- 外部测试白名单：NodeQuality（NQ）、TcpQuality（TQ）、IPQuality、NetQuality、YABS。
+- 外部脚本预览（前 120 行 + SHA-256）、官方命令查看、临时文件执行、修改模式 + `RUN` 确认。
+- `docs/TESTING-TOOLS.md`：NQ/TQ/IPQuality/NetQuality/YABS 调研、许可证、数据外发与信任边界。
+
+### Changed
+
+- 版本升至 `0.5.0-dev`。
+- README/PLAN/DEVELOPMENT/TESTING/INSTALLATION 更新。
+
+### Not included
+
+- 不复制/打包 AGPL/GPL 测试脚本；不自动运行外部测试；不解析/上传结果。
+- 不固定上游脚本 SHA；每次运行显示本次下载摘要。
+- 不做自动安装 mtr/nexttrace/speedtest；内置测试缺少命令时提示。
+
 ## v0.4.0-dev — 2026-10-28
 
 ### Added

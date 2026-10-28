@@ -5,7 +5,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, bbr, checks, common, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
+from . import __version__, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
 
 REPORTS = {
     "system": ("系统概览", checks.system_report),
@@ -363,6 +363,84 @@ def tuning_menu(demo: bool = False, experimental: bool = False) -> None:
             print(f"操作未完成：{exc}")
 
 
+def test_menu(demo: bool = False, experimental: bool = False) -> None:
+    while True:
+        print("\n测试与体检")
+        print("1. 机器 / 系统信息（内置只读）\n2. 网络接口、DNS、延迟（内置）")
+        print("3. 线路追踪 mtr/traceroute（内置）\n4. 带宽下载测试（Cloudflare，消耗流量）")
+        print("5. IP 质量（外部 IPQuality）\n6. 网络质量（外部 NetQuality）")
+        print("7. NodeQuality 综合测试（外部 NQ）\n8. TcpQuality 三网 TCP（外部 TQ）")
+        print("9. YABS 机器跑分（外部）\n10. 预览外部脚本 / 查看官方命令")
+        print("0. 返回")
+        try:
+            choice = input("请选择：").strip()
+        except EOFError:
+            print("\n输入结束。")
+            return
+        if choice in ("0", "q", "Q"):
+            return
+        if choice == "1":
+            if demo:
+                print("【演示】不会执行真实机器测试。")
+            else:
+                try:
+                    print(bench.machine_report())
+                except (bench.BenchFailure, OSError) as exc:
+                    print(f"测试未完成：{exc}")
+        elif choice == "2":
+            if demo:
+                print("【演示】不会执行真实网络测试。")
+            else:
+                try:
+                    print(bench.network_report())
+                except (bench.BenchFailure, OSError) as exc:
+                    print(f"测试未完成：{exc}")
+        elif choice == "3":
+            if demo:
+                print("【演示】不会执行真实线路追踪。")
+            else:
+                try:
+                    print(bench.route_report())
+                except (bench.BenchFailure, OSError) as exc:
+                    print(f"测试未完成：{exc}")
+        elif choice == "4":
+            if demo:
+                print("【演示】不会下载测速文件。")
+                continue
+            try:
+                text = input("下载大小 MiB（10–100，默认 25）：").strip()
+                size = int(text) if text else 25
+                if input("将消耗下载流量，输入 YES 开始：").strip() != "YES":
+                    print("已取消。")
+                    continue
+                print(bench.bandwidth_report(size))
+            except (EOFError, ValueError, bench.BenchFailure) as exc:
+                print(f"测试未完成：{exc}")
+        elif choice in ("5", "6", "7", "8", "9"):
+            keys = {"5": "ipquality", "6": "netquality", "7": "nq", "8": "tq", "9": "yabs"}
+            if demo:
+                print("【演示】不会下载或执行外部测试脚本。")
+            else:
+                external.run(keys[choice], experimental=experimental)
+        elif choice == "10":
+            try:
+                key = input("输入 nq / tq / ipquality / netquality / yabs 预览，留空查看全部命令：").strip().lower()
+            except EOFError:
+                return
+            if key:
+                if key not in external.SPECS:
+                    print("未知名称。")
+                else:
+                    try:
+                        external.preview(key)
+                    except external.ExternalFailure as exc:
+                        print(f"预览失败：{exc}")
+            else:
+                external.show_commands()
+        else:
+            print("无效选择，请重试。")
+
+
 def status_menu(demo: bool = False) -> None:
     while True:
         print("\n状态查询（只读）")
@@ -424,9 +502,9 @@ def menu(demo: bool = False, experimental: bool = False) -> int:
         else:
             print("【只读模式：不会修改系统】")
         print("1. 系统概览\n2. 网络设置\n3. SSH 与安全\n4. 3x-ui 管理\n5. 系统软件（试验功能）")
-        print("6. 常用工具\n7. 状态查询（只读）\n8. 工具维护\n9. VPS 优化（内核网络调优）")
+        print("6. 常用工具\n7. 状态查询（只读）\n8. 工具维护\n9. VPS 优化（内核网络调优）\n10. 测试与体检（NQ/TQ/带宽/线路）")
         if not modify:
-            print("10. 启用修改模式")
+            print("11. 启用修改模式")
         print("0. 退出")
         try:
             choice = input("请选择：").strip()
@@ -453,7 +531,9 @@ def menu(demo: bool = False, experimental: bool = False) -> int:
             maintenance_menu()
         elif choice == "9":
             tuning_menu(demo=demo, experimental=modify)
-        elif choice == "10" and not modify and not demo:
+        elif choice == "10":
+            test_menu(demo=demo, experimental=modify)
+        elif choice == "11" and not modify and not demo:
             print("修改模式会启用 APT、3x-ui、BBR、内核调优、SSH、UFW、Fail2ban、Hy2、swap 和时区变更。")
             print("每项操作仍需单独确认；请确保有服务商控制台和备份。")
             if input("输入 ENABLE 启用，其他内容取消：").strip() == "ENABLE":

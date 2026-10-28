@@ -2,7 +2,7 @@
 
 面向 Ubuntu / Debian 新 VPS 的初始化与日常管理面板。在 SSH 终端里按需选择功能，执行前显示影响，执行后给出只读状态；默认只读，修改需要显式启用。
 
-当前版本：**v0.4.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
+当前版本：**v0.5.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
 
 ## 一键安装 / 升级
 
@@ -38,6 +38,7 @@ vps-script status       # 全部只读状态
 | Fail2ban | 查看 jail/封禁计数、创建项目 SSH jail、SSH 端口变化后刷新、解封 IP | `status fail2ban` |
 | Hy2 | 创建/移除项目专属 nftables 跳跃端口转发和开机服务，可选放行 UFW | `status hy2` |
 | 常用工具 | swap 创建/移除、时区查看/设置、DNS 只读查看 | `status swap`、`status timezone`、`status dns` |
+| 测试与体检 | 内置机器/网络/线路/带宽测试；白名单外部 NQ、TQ、IPQuality、NetQuality、YABS | 终端输出 |
 | 状态查询 | 单项/分组/全部状态，支持 JSON | `status --json` |
 
 状态分组别名：`network` = BBR + 内核调优 + Hy2，`security` = SSH + UFW + Fail2ban，`common` = swap + 时区 + DNS。
@@ -61,6 +62,7 @@ vps-script doctor
 - 3x-ui 安装脚本以 root 运行且会访问 GitHub/APT/公网 IP 查询服务；项目固定了版本和入口摘要，但上游包和可选证书步骤仍有各自信任边界。
 - swap 只管理 `/swapfile-vps-script` 和带标记的 fstab 行；已有其他 swap 时停止。
 - 内核网络调优只改项目 sysctl 文件，不代表实际提速；参数效果需同机、同对端 A/B 测试。不做 qdisc 整形、不改内核、不自动 RPS/MSS/DNS。
+- 外部 NQ/TQ/IPQuality/NetQuality/YABS 不是本项目代码，按各自 AGPL/GPL/WTFPL 许可证运行；需要修改模式、输入 `RUN`，会下载远程脚本/rootfs/二进制并可能上传 IP/结果。先用“预览”审查，只在测试 VPS 上运行。
 - 软件包升级、3x-ui 安装、内核/服务重启无法保证完整回滚；重要机器请先快照。
 
 ## 本地开发

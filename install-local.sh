@@ -118,8 +118,8 @@ if (( (8#$launcher_dir_mode & 8#020) != 0 )); then
   printf '提示：/usr/local/bin 对 %s 组可写；将只创建 root 所有、0755 的启动器，请确认该组成员可信。\n' "$launcher_dir_group"
 fi
 
-modules=(__init__.py __main__.py checks.py cli.py packages.py panel.py bbr.py hy2.py firewall.py ufw_rollback.py fail2ban.py ssh.py ssh_rollback.py status.py swap.py common.py tuning.py)
-documents=(PLAN.md DEVELOPMENT.md 3X-UI-AUDIT.md INSTALLATION.md TESTING.md REVIEW.md OPTIMIZATION.md)
+modules=(__init__.py __main__.py checks.py cli.py packages.py panel.py bbr.py hy2.py firewall.py ufw_rollback.py fail2ban.py ssh.py ssh_rollback.py status.py swap.py common.py tuning.py bench.py external.py)
+documents=(PLAN.md DEVELOPMENT.md 3X-UI-AUDIT.md INSTALLATION.md TESTING.md REVIEW.md OPTIMIZATION.md TESTING-TOOLS.md)
 for directory in "$source_dir/src" "$source_dir/src/vps_admin" "$source_dir/docs"; do
   if [[ ! -d "$directory" || -L "$directory" ]]; then
     printf '源码目录不可用或为符号链接：%s\n' "$directory" >&2
