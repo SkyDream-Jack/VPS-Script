@@ -14,7 +14,7 @@ f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Sc
 <summary>可审查的 Python 单行命令（已固定入口和测试包摘要）</summary>
 
 ```bash
-/usr/bin/python3 -I -c 'import os,sys,hashlib,urllib.request; sys.platform.startswith("linux") and os.geteuid()==0 and sys.stdin.isatty() and sys.stdout.isatty() or sys.exit("请在测试 VPS 的交互式 root SSH 终端运行"); u="https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.3.0-dev/bootstrap.py"; h=type("NoRedirect",(urllib.request.HTTPRedirectHandler,),{"redirect_request":lambda *a,**k:None}); d=urllib.request.build_opener(h()).open(u,timeout=20).read(200001); len(d)<=200000 and hashlib.sha256(d).hexdigest()=="8b8f2e17313f23c4f7160c5241476cc4ca15f69925e89d8d037de5e02e4dffd1" or sys.exit("下载入口校验失败"); exec(compile(d,u,"exec"))' v0.3.0-dev 011e34248f99e60818675d3ec55b195d624089ab71bb09dd3f963a63933262c9 --upgrade --start-menu
+/usr/bin/python3 -I -c 'import os,sys,hashlib,urllib.request; sys.platform.startswith("linux") and os.geteuid()==0 and sys.stdin.isatty() and sys.stdout.isatty() or sys.exit("请在测试 VPS 的交互式 root SSH 终端运行"); u="https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.3.0-dev/bootstrap.py"; h=type("NoRedirect",(urllib.request.HTTPRedirectHandler,),{"redirect_request":lambda *a,**k:None}); d=urllib.request.build_opener(h()).open(u,timeout=20).read(200001); len(d)<=200000 and hashlib.sha256(d).hexdigest()=="8b8f2e17313f23c4f7160c5241476cc4ca15f69925e89d8d037de5e02e4dffd1" or sys.exit("下载入口校验失败"); exec(compile(d,u,"exec"))' v0.3.0-dev ad9eb436b4b4263a192590228dfe9683a4438b4dd06ebc13294c2091622c84fb --upgrade --start-menu
 ```
 
 </details>
@@ -23,6 +23,6 @@ f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Sc
 
 入口 SHA-256：`8b8f2e17313f23c4f7160c5241476cc4ca15f69925e89d8d037de5e02e4dffd1`
 
-测试包 SHA-256：`011e34248f99e60818675d3ec55b195d624089ab71bb09dd3f963a63933262c9`
+测试包 SHA-256：`ad9eb436b4b4263a192590228dfe9683a4438b4dd06ebc13294c2091622c84fb`
 
-短入口 SHA-256：`8484af527eae5eff4d6609f716088748fe89f43650c9d933f8898f6a4d5e7bac`
+短入口 SHA-256：`a90cb909550bc62a3c5e4f73c4ad0b70d4ef2258368799a2c1e0dbdfe863ea00`

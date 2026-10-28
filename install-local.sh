@@ -83,17 +83,33 @@ if [[ -e "$launcher" || -L "$launcher" ]]; then
 fi
 
 secure_dir() {
-  local directory=$1 owner mode
+  local directory=$1 allow_group_write=${2:-0} owner group mode
   [[ -d "$directory" && ! -L "$directory" ]] || return 1
   owner=$(/usr/bin/stat -c '%u' -- "$directory") || return 1
   mode=$(/usr/bin/stat -c '%a' -- "$directory") || return 1
   [[ "$owner" == 0 && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
-  (( (8#$mode & 8#022) == 0 ))
+  # 任何用户可写一律拒绝；组可写只对启动器目录、且组为 root/staff 时放行。
+  (( (8#$mode & 8#002) == 0 )) || return 1
+  if (( (8#$mode & 8#020) != 0 )); then
+    (( allow_group_write )) || return 1
+    group=$(/usr/bin/stat -c '%G' -- "$directory") || return 1
+    [[ "$group" == "root" || "$group" == "staff" ]] || return 1
+  fi
+  return 0
 }
 
-if ! secure_dir /opt || ! secure_dir /usr/local/bin; then
-  printf '%s\n' '/opt 或 /usr/local/bin 不存在、不是 root 所有或可被其他用户写入，已停止。' >&2
+if ! secure_dir /opt; then
+  printf '%s\n' '/opt 不存在、不是普通目录、不是 root 所有或可被其他用户写入，已停止。' >&2
   exit 2
+fi
+if ! secure_dir /usr/local/bin 1; then
+  printf '%s\n' '/usr/local/bin 不存在、不是普通目录、不是 root 所有或可被其他用户写入，已停止。' >&2
+  exit 2
+fi
+launcher_dir_mode=$(/usr/bin/stat -c '%a' -- /usr/local/bin) || exit 2
+if (( (8#$launcher_dir_mode & 8#020) != 0 )); then
+  launcher_dir_group=$(/usr/bin/stat -c '%G' -- /usr/local/bin) || exit 2
+  printf '提示：/usr/local/bin 对 %s 组可写；将只创建 root 所有、0755 的启动器，请确认该组成员可信。\n' "$launcher_dir_group"
 fi
 
 modules=(__init__.py __main__.py checks.py cli.py packages.py panel.py bbr.py hy2.py firewall.py ufw_rollback.py fail2ban.py ssh.py ssh_rollback.py status.py swap.py common.py)
