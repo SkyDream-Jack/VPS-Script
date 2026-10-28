@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.1-dev — 2026-10-28
+
+### Changed
+
+- 明确 SSH “仅公钥认证”不会修改 SSH 端口，也不会禁用 root 登录；菜单文案改为“禁用密码；保留 root 和当前端口”。
+- `status ssh` 对 `PermitRootLogin yes` + 密码/键盘交互关闭的情况改为“信息”而非“建议改 no”，并说明 root 实际只能密钥登录；仍建议手动改为 `prohibit-password`。
+- README/DEVELOPMENT 增加“保留 root + 22 + 仅公钥”方案及风险说明。
+
 ## v0.5.0-dev — 2026-10-28
 
 ### Added

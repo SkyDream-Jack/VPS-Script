@@ -321,8 +321,24 @@ def _ssh():
         else:
             items.append(_item("仅公钥认证", "warn", "有效配置仍允许密码或键盘交互认证。"))
         root_login = values.get("permitrootlogin", [])
-        if root_login and root_login[0] == "yes":
-            items.append(_item("root 登录", "warn", "PermitRootLogin 为 yes；建议改为 prohibit-password 或 no。"))
+        password_off = password == ["no"] and kbd == ["no"]
+        root_key_possible = (password_off and pubkey == ["yes"]
+                             and methods in ([], ["publickey"]))
+        if root_login:
+            policy = root_login[0]
+            if policy == "yes" and root_key_possible:
+                items.append(_item("root 登录", "info",
+                                   "PermitRootLogin 为 yes，但密码/键盘交互已关闭；root 只能使用密钥。"
+                                   "若想更明确，可改为 prohibit-password。"))
+            elif policy == "yes":
+                items.append(_item("root 登录", "warn",
+                                   "PermitRootLogin 为 yes 且密码认证可能仍启用；建议改为 prohibit-password 或 no。"))
+            elif policy in ("prohibit-password", "without-password"):
+                items.append(_item("root 登录", "info", "root 仅允许密钥登录（prohibit-password）。"))
+            elif policy == "no":
+                items.append(_item("root 登录", "info", "root 登录已禁用；如需 root 请使用普通用户 + sudo。"))
+            else:
+                items.append(_item("root 登录", "info", f"当前策略：{policy}。"))
         # 检查 UFW 是否放行有效 SSH 端口。
         ufw = checks.run_check("ufw")
         if ufw.state == "ok" and "Status: active" in ufw.output and ports:

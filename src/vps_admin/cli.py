@@ -176,7 +176,7 @@ def security_menu(demo: bool = False, experimental: bool = False) -> None:
         print("\nSSH 与安全")
         print("1. 查看 SSH / UFW / Fail2ban 状态\n2. 允许 UFW 端口或范围（试验功能）\n3. 启用 UFW（试验功能）")
         print("4. 配置 SSH Fail2ban jail（试验功能）\n5. 新增 SSH 端口（试验功能）\n6. 关闭项目管理的旧 SSH 端口（试验功能）")
-        print("7. 只允许公钥认证（试验功能）\n8. 查看 UFW 详细状态\n9. 删除 UFW 允许规则（试验功能）")
+        print("7. 只允许公钥认证（禁用密码；保留 root 和当前端口）\n8. 查看 UFW 详细状态\n9. 删除 UFW 允许规则（试验功能）")
         print("10. Fail2ban 状态与解封（试验功能）\n11. 查看 SSH 状态\n0. 返回")
         try:
             choice = input("请选择：").strip()

@@ -386,6 +386,7 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
         if key_only:
             users = login_users()
             print("这会禁用所有账户的密码和键盘交互认证，而不只是当前账户。")
+            print("这不会修改 SSH 端口，也不会禁用 root 登录；root 仍可通过密钥登录。")
             print("检测到的可登录账户：" + ("、".join(users) if users else "未知"))
             print("当前只验证了目标账户的公钥登录；其他账户是否已配置公钥无法由本工具证明。")
             if input("输入 ALL USERS 确认影响范围，其他内容取消：").strip() != "ALL USERS":
@@ -408,6 +409,8 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
         result = SSHManager().change(user=user, address=address, current_port=current_port,
                                      new_port=new_port, remove_port=remove_port, key_only=key_only, verify=verify)
         print(result)
+        if key_only:
+            print("SSH 端口和 root 登录策略保持原样；请确认 root 账号使用密钥登录，并确认密码/键盘交互被拒绝。")
         if new_port is not None or remove_port is not None:
             try:
                 from . import fail2ban

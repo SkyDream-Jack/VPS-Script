@@ -4,6 +4,8 @@
 
 > v0.4.0-dev 追加：在 v0.3.0-dev 基础上增加内核网络调优（保守/代理/缓冲三档）、动态缓冲区、冲突检测/回滚和 `status tuning`。调研与取舍见 [OPTIMIZATION.md](OPTIMIZATION.md)。改动前已建立标签 `backup/pre-tuning-2026-10-28` 和本地备份包。
 >
+> v0.5.1-dev 补充：明确支持“保留 root + 22 + 仅公钥”的方案；只改菜单/状态文案，不改变 root 登录和端口。
+>
 > v0.5.0-dev 追加：测试与体检（内置机器/网络/线路/带宽 + 白名单外部 NQ/TQ/IPQuality/NetQuality/YABS）。外部脚本不打包、不自动运行，先预览再确认；见 [TESTING-TOOLS.md](TESTING-TOOLS.md)。备份点 `backup/pre-testing-2026-10-28`。
 
 ## 结论
