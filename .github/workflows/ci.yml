@@ -32,6 +32,12 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
       - name: Check Linux system overview
         run: ./vps-admin status system
+      - name: Check structured read-only status
+        run: |
+          ./vps-admin status all > /tmp/vps-status.txt
+          head -20 /tmp/vps-status.txt
+          ./vps-admin status --json > /tmp/vps-status.json
+          python3 -c 'import json; d=json.load(open("/tmp/vps-status.json")); assert d["schema"] == 1; assert len(d["sections"]) >= 10'
       - name: Exercise one-command test installer and upgrade on disposable Ubuntu 24.04 runner
         if: matrix.os == 'ubuntu-24.04'
         timeout-minutes: 5
@@ -95,3 +101,9 @@ jobs:
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
       - name: Check Linux system overview
         run: ./vps-admin status system
+      - name: Check structured read-only status
+        run: |
+          ./vps-admin status all > /tmp/vps-status.txt
+          head -20 /tmp/vps-status.txt
+          ./vps-admin status --json > /tmp/vps-status.json
+          python3 -c 'import json; d=json.load(open("/tmp/vps-status.json")); assert d["schema"] == 1; assert len(d["sections"]) >= 10'
