@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -75,6 +76,11 @@ class FirewallTest(unittest.TestCase):
         self.find = patch.object(firewall.checks, "find_command", side_effect=commands.get)
         self.find.start()
         self.addCleanup(self.find.stop)
+        real_isfile = os.path.isfile
+        self.system_python = patch.object(firewall.os.path, "isfile",
+                                          side_effect=lambda path: path == "/usr/bin/python3" or real_isfile(path))
+        self.system_python.start()
+        self.addCleanup(self.system_python.stop)
         self.output = contextlib.redirect_stdout(io.StringIO())
         self.output.__enter__()
         self.addCleanup(self.output.__exit__, None, None, None)
@@ -178,6 +184,13 @@ class FirewallTest(unittest.TestCase):
         self.manager.enable(2222, lambda: True)
         self.assertEqual(self.fake.rules, [])
         self.assertFalse(any("systemd-run" in args[0] for args in self.fake.calls))
+
+    def test_missing_system_python_blocks_enable(self):
+        with patch.object(firewall.os.path, "isfile", return_value=False), \
+             self.assertRaisesRegex(firewall.FirewallFailure, "systemd 与 /usr/bin/python3"):
+            self.manager.enable(2222, lambda: True)
+        self.assertEqual(self.fake.rules, [])
+        self.assertFalse(self.fake.active)
 
     def test_validates_remote_session_and_port_range(self):
         self.assertEqual(firewall.ssh_session_port("192.0.2.1 40000 192.0.2.2 2222"), 2222)
