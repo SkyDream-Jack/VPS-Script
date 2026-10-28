@@ -115,15 +115,14 @@ class Hy2Test(unittest.TestCase):
         self.assertTrue(self.fake.active)
         self.assertTrue(self.manager.state.exists())
 
-    def test_incomplete_enable_can_be_cleaned_when_no_table_exists(self):
+    def test_failed_enable_is_cleaned_up(self):
         self.fake.fail_enable = True
         with self.assertRaisesRegex(hy2.Hy2Failure, "应用未完成"):
             self.manager.apply(self.spec)
-        self.assertTrue(self.manager.state.exists())
         self.assertFalse(self.fake.active)
-        self.manager.remove()
         self.assertFalse(self.manager.state.exists())
         self.assertFalse(self.manager.config.exists())
+        self.assertFalse(self.manager.unit.exists())
 
     def test_range_cannot_steal_other_udp_listener(self):
         with self.assertRaisesRegex(hy2.Hy2Failure, "监听端口冲突"):

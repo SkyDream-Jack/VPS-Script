@@ -40,6 +40,20 @@ def ufw_state(output):
     raise FirewallFailure("无法判断 UFW 当前状态")
 
 
+def ufw_defaults(output):
+    for line in output.splitlines():
+        if line.startswith("Default:"):
+            value = line.split(":", 1)[1]
+            result = {}
+            for part in value.split(","):
+                part = part.strip()
+                if "(" in part and part.endswith(")"):
+                    policy, _, direction = part.partition("(")
+                    result[direction.rstrip(")")] = policy.strip()
+            return result
+    raise FirewallFailure("无法读取 UFW 默认策略")
+
+
 def port_rule(start, end, protocol):
     if any(type(value) is not int or not 1 <= value <= 65535 for value in (start, end)) or start > end:
         raise FirewallFailure("端口范围无效")
@@ -74,6 +88,12 @@ class FirewallManager:
 
     def status(self, ufw):
         return ufw_state(self.run((ufw, "status")).stdout)
+
+    def verbose_status(self, ufw):
+        return self.run((ufw, "status", "verbose")).stdout
+
+    def defaults(self, ufw):
+        return ufw_defaults(self.verbose_status(ufw))
 
     def ensure_no_competing_services(self, systemctl):
         for service in ("firewalld.service", "nftables.service", "docker.service", "fail2ban.service"):
@@ -124,6 +144,14 @@ class FirewallManager:
             result = self.run((ufw, "allow", rule))
             return f"UFW 当前为 {current}；添加规则命令已执行。\n{result.stdout.strip()}\n请独立检查 IPv4/IPv6 和云防火墙。"
 
+    def delete(self, start, end, protocol):
+        rule = port_rule(start, end, protocol)
+        with self.files.locked():
+            ufw = self.command("ufw")
+            current = self.status(ufw)
+            result = self.run((ufw, "delete", "allow", rule))
+            return f"UFW 当前为 {current}；删除规则命令已执行。\n{result.stdout.strip()}\n请检查是否仍有其他规则放行该端口。"
+
     def enable(self, port, verify):
         if type(port) is not int or not 1 <= port <= 65535:
             raise FirewallFailure("SSH 端口无效")
@@ -131,6 +159,11 @@ class FirewallManager:
             ufw = self.command("ufw")
             if self.status(ufw) == "active":
                 return "UFW 已处于 active；没有改变现有规则或默认策略。"
+            defaults = self.defaults(ufw)
+            if defaults.get("incoming") != "deny":
+                raise FirewallFailure("UFW 默认入站策略不是 deny；请先设置 ufw default deny incoming，避免启用后仍然放行全部入站")
+            if defaults.get("outgoing") not in ("allow", "deny"):
+                raise FirewallFailure("无法确认 UFW 默认出站策略")
             systemctl = self.command("systemctl")
             systemd_run = self.command("systemd-run")
             python = "/usr/bin/python3"

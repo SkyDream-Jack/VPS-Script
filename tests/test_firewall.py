@@ -32,11 +32,13 @@ class FakeFirewall:
         name = Path(args[0]).name
         if name == "ufw" and args[1:] in (("status",), ("status", "verbose")):
             status = "Status: active\n" if self.active else "Status: inactive\n"
-            if args[1:] == ("status", "verbose") and self.active:
-                if self.fail_snapshot_once:
-                    self.fail_snapshot_once = False
-                    return subprocess.CompletedProcess(args, 1, "", "snapshot failed")
-                status += "\n".join(self.rules) + "\n"
+            if args[1:] == ("status", "verbose"):
+                status += "Default: deny (incoming), allow (outgoing), disabled (routed)\n"
+                if self.active:
+                    if self.fail_snapshot_once:
+                        self.fail_snapshot_once = False
+                        return subprocess.CompletedProcess(args, 1, "", "snapshot failed")
+                    status += "\n".join(self.rules) + "\n"
             return subprocess.CompletedProcess(args, 0, status, "")
         if name == "nft":
             self.nft_reads += 1

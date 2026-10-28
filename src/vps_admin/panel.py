@@ -41,6 +41,39 @@ def existing_installation(paths=EXISTING_PATHS):
     return tuple(path for path in paths if os.path.lexists(path))
 
 
+def read_settings():
+    """只读取面板端口和路径，不读取账户、密码或数据库。"""
+    executable = Path("/usr/local/x-ui/x-ui")
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        return {}
+    try:
+        result = subprocess.run(
+            (str(executable), "setting", "-show", "true"),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5, check=False,
+            env={"PATH": packages.SAFE_PATH, "LC_ALL": "C", "HOME": "/root"},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    values = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition(":")
+        if not separator:
+            continue
+        key = key.strip().lower()
+        if key == "port":
+            value = value.strip()
+            if value.isdigit() and 1 <= int(value) <= 65535:
+                values["端口"] = value
+        elif key == "webbasepath":
+            value = value.strip()
+            if value.startswith("/") and len(value) <= 128 and "\n" not in value:
+                values["面板路径"] = value
+    return values
+
+
 def check_environment(experimental):
     error = packages.preflight(experimental)
     if error:

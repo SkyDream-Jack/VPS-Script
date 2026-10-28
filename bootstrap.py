@@ -26,11 +26,12 @@ MAX_EXPANDED = 2_000_000
 MAX_TAR_BYTES = 2_500_000
 FILES = frozenset({
     "README.md", "vps-admin", "install-local.sh", "bootstrap.py",
-    "docs/PLAN.md", "docs/DEVELOPMENT.md", "docs/3X-UI-AUDIT.md", "docs/INSTALLATION.md", "docs/TESTING.md",
+    "docs/PLAN.md", "docs/DEVELOPMENT.md", "docs/3X-UI-AUDIT.md", "docs/INSTALLATION.md", "docs/TESTING.md", "docs/REVIEW.md",
     "src/vps_admin/__init__.py", "src/vps_admin/__main__.py", "src/vps_admin/checks.py", "src/vps_admin/cli.py",
     "src/vps_admin/packages.py", "src/vps_admin/panel.py", "src/vps_admin/bbr.py", "src/vps_admin/hy2.py",
     "src/vps_admin/firewall.py", "src/vps_admin/ufw_rollback.py", "src/vps_admin/fail2ban.py",
-    "src/vps_admin/ssh.py", "src/vps_admin/ssh_rollback.py",
+    "src/vps_admin/ssh.py", "src/vps_admin/ssh_rollback.py", "src/vps_admin/status.py",
+    "src/vps_admin/swap.py", "src/vps_admin/common.py",
 })
 EXECUTABLE = frozenset({"vps-admin", "install-local.sh", "bootstrap.py"})
 
@@ -121,6 +122,7 @@ def main(argv=None):
     parser.add_argument("version")
     parser.add_argument("sha256")
     parser.add_argument("--preview", action="store_true", help="仅查看来源，不下载")
+    parser.add_argument("--upgrade", action="store_true", help="已安装时替换程序目录，保留系统配置")
     parser.add_argument("--start-menu", action="store_true", help="安装成功后打开试验菜单")
     args = parser.parse_args(argv)
     try:
@@ -138,9 +140,11 @@ def main(argv=None):
     if platform.system() != "Linux" or not hasattr(os, "geteuid") or os.geteuid() != 0 or not sys.stdin.isatty() or not sys.stdout.isatty():
         print("需要 Linux、root 和交互式终端；未下载。", file=sys.stderr)
         return 2
-    print("该功能尚未经过真实 Linux/VPS 验证，只能用于可丢弃测试环境。")
+    print("该功能尚未完成真实 Linux/VPS 全功能验证，只能用于可丢弃测试环境。")
+    if args.upgrade:
+        print("将替换程序目录；/etc、/var 中的 SSH、防火墙、BBR、Hy2 和 3x-ui 配置不会被替换。")
     if args.start_menu:
-        print("安装成功后将打开试验菜单；各项修改仍需选择并单独确认。")
+        print("安装/升级成功后将打开试验菜单；各项修改仍需选择并单独确认。")
     try:
         if input("输入 YES 下载，其他内容取消：").strip() != "YES":
             print("已取消。")
@@ -152,7 +156,10 @@ def main(argv=None):
             for key in ("TERM", "LANG", "LC_ALL", "SSH_CONNECTION", "SUDO_USER"):
                 if key in os.environ:
                     env[key] = os.environ[key]
-            result = subprocess.run(("/bin/bash", str(root / "install-local.sh")), env=env, check=False)
+            command = ["/bin/bash", str(root / "install-local.sh")]
+            if args.upgrade:
+                command.append("--upgrade")
+            result = subprocess.run(tuple(command), env=env, check=False)
             if result.returncode != 0:
                 return result.returncode if result.returncode >= 0 else 1
             if args.start_menu:
@@ -162,7 +169,7 @@ def main(argv=None):
                 if not launcher.is_file() or not installed.is_file():
                     print("未检测到已完成的安装；不会启动菜单。")
                     return 0
-                print("\n安装完成，打开试验菜单；系统修改仍需要逐项选择并确认。", flush=True)
+                print("\n安装/升级完成，打开试验菜单；系统修改仍需要逐项选择并确认。", flush=True)
                 menu = subprocess.run((str(launcher), "--experimental"), env=env, check=False)
                 return menu.returncode if menu.returncode >= 0 else 1
             return 0

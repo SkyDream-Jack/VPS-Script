@@ -16,6 +16,7 @@ TCP = "net.ipv4.tcp_congestion_control"
 QDISC = "net.core.default_qdisc"
 TARGET = {TCP: "bbr", QDISC: "fq"}
 CONFIG = b"# Managed by VPS-Script; do not edit while managed.\nnet.ipv4.tcp_congestion_control = bbr\nnet.core.default_qdisc = fq\n"
+MODULES = b"# Managed by VPS-Script; load tcp_bbr at boot when it is not built in.\ntcp_bbr\n"
 VALUE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 ASSIGNMENT_RE = re.compile(r"^\s*-?\s*(net[./]ipv4[./]tcp_congestion_control|net[./]core[./]default_qdisc)\s*(?:=|\s)\s*([^\s#;]+)")
 
@@ -29,6 +30,7 @@ class BBRManager:
         self.root = Path(root)
         self.runner = runner or subprocess.run
         self.config = self.root / "etc/sysctl.d/90-vps-script.conf"
+        self.modules = self.root / "etc/modules-load.d/vps-script-bbr.conf"
         self.state_dir = self.root / "var/lib/vps-script"
         self.state = self.state_dir / "bbr-state.json"
         self.lock = self.root / "run/lock/vps-script-bbr.lock"
@@ -112,6 +114,17 @@ class BBRManager:
         if info.st_mode & 0o077:
             raise BBRFailure("状态目录权限过宽，拒绝写入")
 
+    def _prepare_modules_dir(self):
+        try:
+            self.modules.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            info = os.lstat(self.modules.parent)
+        except OSError as exc:
+            raise BBRFailure(f"无法准备模块目录: {exc}") from exc
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+            raise BBRFailure("模块持久化目录不安全")
+        if self.root == Path("/") and info.st_uid != 0:
+            raise BBRFailure("模块持久化目录不是 root 所有")
+
     @staticmethod
     def _atomic_create(path, data, mode):
         temp_path = None
@@ -179,6 +192,8 @@ class BBRManager:
     def _restore_locked(self, before):
         if os.path.lexists(self.config) and self._read_regular(self.config) != CONFIG:
             raise BBRFailure("项目配置已被外部修改，拒绝覆盖或恢复")
+        if os.path.lexists(self.modules) and self._read_regular(self.modules) != MODULES:
+            raise BBRFailure("模块持久化文件已被外部修改，拒绝覆盖或恢复")
         live = self.read_live()
         for key in TARGET:
             if live[key] not in (before[key], TARGET[key]):
@@ -192,6 +207,10 @@ class BBRManager:
             if self._read_regular(self.config) != CONFIG:
                 raise BBRFailure("配置文件在恢复时发生变化，拒绝删除")
             os.unlink(self.config)
+        if os.path.lexists(self.modules):
+            if self._read_regular(self.modules) != MODULES:
+                raise BBRFailure("模块持久化文件在恢复时发生变化，拒绝删除")
+            os.unlink(self.modules)
         os.unlink(self.state)
 
     def apply(self, load_module=False):
@@ -203,6 +222,14 @@ class BBRManager:
                 raise BBRFailure("发现未完成或不一致的旧操作，请先检查并恢复")
             if os.path.lexists(self.config):
                 raise BBRFailure("目标配置文件已存在，拒绝覆盖")
+            if os.path.lexists(self.modules):
+                try:
+                    if self._read_regular(self.modules) != MODULES:
+                        raise BBRFailure("模块持久化文件已存在且不属于本项目，拒绝覆盖")
+                except BBRFailure:
+                    raise
+                except OSError as exc:
+                    raise BBRFailure(f"无法读取模块持久化文件：{exc}") from exc
             conflicts = self.conflicts()
             if conflicts:
                 raise BBRFailure("发现其他 sysctl 配置冲突：\n" + "\n".join(conflicts))
@@ -231,6 +258,9 @@ class BBRManager:
                 if self.read_live() != TARGET:
                     raise BBRFailure("运行时配置未全部生效")
                 self._atomic_create(self.config, CONFIG, 0o644)
+                if load_module and not os.path.lexists(self.modules):
+                    self._prepare_modules_dir()
+                    self._atomic_create(self.modules, MODULES, 0o644)
             except BaseException:
                 try:
                     self._restore_locked(before)

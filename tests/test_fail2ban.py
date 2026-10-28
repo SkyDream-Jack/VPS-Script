@@ -90,6 +90,28 @@ class Fail2banTest(unittest.TestCase):
         with self.assertRaises(fail2ban.Fail2banFailure):
             fail2ban.jail_names("unknown output")
 
+    def test_jail_config_records_banaction(self):
+        text = fail2ban.jail_config((22, 2222), "ufw").decode("utf-8")
+        self.assertIn("port = 22,2222", text)
+        self.assertIn("banaction = ufw", text)
+        with self.assertRaises(fail2ban.Fail2banFailure):
+            fail2ban.jail_config((22,), "shell")
+
+    def test_refresh_ports_updates_only_owned_jail(self):
+        self.manager.config.write_text(
+            fail2ban.jail_config((22,), "iptables-multiport").decode("utf-8"), encoding="utf-8")
+        result = self.manager.refresh_ports()
+        self.assertIn("22, 2222", result)
+        self.assertIn("port = 22,2222", self.manager.config.read_text(encoding="utf-8"))
+        self.assertTrue(any(args[1:] == ("reload",) for args in self.fake.calls))
+
+    def test_unban_validates_ip_and_uses_existing_jail(self):
+        self.fake.names = ["sshd"]
+        result = self.manager.unban("192.0.2.9")
+        self.assertIn("sshd", result)
+        with self.assertRaises(fail2ban.Fail2banFailure):
+            self.manager.unban("not-an-ip")
+
     def test_demo_never_changes_fail2ban(self):
         with patch("builtins.input", side_effect=["4", "0"]), \
              patch.object(fail2ban, "configure", side_effect=AssertionError("must not run")), \

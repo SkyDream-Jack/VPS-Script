@@ -25,10 +25,31 @@ jobs:
         run: |
           bash -n vps-admin
           bash -n install-local.sh
+          bash -n test-releases/latest/install.sh
+      - name: Compile Python sources
+        run: python3 -m compileall -q src bootstrap.py release
       - name: Run unit tests
         run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
       - name: Check Linux system overview
         run: ./vps-admin status system
+      - name: Exercise one-command test installer and upgrade on disposable Ubuntu 24.04 runner
+        if: matrix.os == 'ubuntu-24.04'
+        timeout-minutes: 5
+        run: |
+          installer=$(mktemp)
+          trap 'rm -f "$installer"' EXIT
+          python3 - "$installer" <<'PY'
+          from pathlib import Path
+          import sys
+          text = Path('test-releases/latest/INSTALL.md').read_text(encoding='utf-8')
+          command = text.split('```bash\n', 1)[1].split('\n```', 1)[0]
+          Path(sys.argv[1]).write_text('#!/bin/bash\nset -e\n' + command + '\n', encoding='utf-8')
+          PY
+          printf 'YES\nYES\n0\n' | script -q -e -c "sudo -n bash '$installer'" /dev/null
+          test -x /usr/local/bin/vps-script
+          /usr/local/bin/vps-script status system
+          printf 'YES\nYES\n0\n' | script -q -e -c "sudo -n bash '$installer'" /dev/null
+          /usr/local/bin/vps-script status system | head -5
 
   debian:
     name: ${{ matrix.image }}

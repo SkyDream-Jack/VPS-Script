@@ -25,6 +25,18 @@ class SSHFailure(Exception):
     pass
 
 
+def login_users():
+    """列出可能使用交互式登录的账户；仅用于影响提示。"""
+    users = []
+    for entry in pwd.getpwall():
+        shell = Path(entry.pw_shell).name
+        if shell in ("nologin", "false", "sync", "shutdown", "halt"):
+            continue
+        if entry.pw_uid == 0 or entry.pw_uid >= 1000:
+            users.append(entry.pw_name)
+    return tuple(sorted(set(users)))
+
+
 def read_managed(data):
     if data is None:
         return set(), False
@@ -345,7 +357,7 @@ class SSHManager:
             return f"SSH 设置已应用并收到第二会话确认；{detail} 云防火墙需独立检查。"
 
 
-def change(new_port=None, remove_port=None, key_only=False, experimental=False):
+def change(new_port=None, remove_port=None, key_only=False, open_firewall=False, experimental=False):
     error = packages.preflight(experimental)
     if error:
         print(f"未执行：{error}")
@@ -359,10 +371,26 @@ def change(new_port=None, remove_port=None, key_only=False, experimental=False):
         print("只处理标准 Debian/Ubuntu SSH 配置；出现 Match、非标准 Include 或无法判断的情况会停止。")
         print("设置 180 秒瞬态超时恢复，不能保证跨重启。")
         if new_port is not None:
-            print(f"请先确保主机和云防火墙允许新 TCP 端口 {new_port}；成功后旧端口仍保留。")
+            print(f"请先确保云防火墙允许新 TCP 端口 {new_port}；成功后旧端口仍保留。")
+            if open_firewall:
+                print(f"将在修改 SSH 前请求 UFW 允许 {new_port}/tcp；若 UFW 未安装会提示但不会阻止 SSH 变更。")
+                try:
+                    print(firewall.FirewallManager().allow(new_port, new_port, "tcp"))
+                except (firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
+                    print(f"UFW 放行未完成：{exc}；请手动确认后再继续。")
+                    if input("输入 CONTINUE 跳过 UFW 放行继续，其他内容取消：").strip() != "CONTINUE":
+                        print("已取消。")
+                        return 0
         if remove_port is not None:
             print(f"将关闭项目管理的 SSH 旧端口 {remove_port}；必须从其他已验证的端口运行本操作。")
         if key_only:
+            users = login_users()
+            print("这会禁用所有账户的密码和键盘交互认证，而不只是当前账户。")
+            print("检测到的可登录账户：" + ("、".join(users) if users else "未知"))
+            print("当前只验证了目标账户的公钥登录；其他账户是否已配置公钥无法由本工具证明。")
+            if input("输入 ALL USERS 确认影响范围，其他内容取消：").strip() != "ALL USERS":
+                print("已取消。")
+                return 0
             print("请先从第二终端禁用连接复用并强制使用公钥成功登录；存在多因素认证要求时不会覆盖。")
             print("SSH 客户端可使用 -o ControlMaster=no -o ControlPath=none -o PreferredAuthentications=publickey -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no。")
             print("修改后还需检查密码或键盘交互方式是否被拒绝；配置值和公钥登录成功本身不能证明这一点。")
@@ -377,8 +405,17 @@ def change(new_port=None, remove_port=None, key_only=False, experimental=False):
                 return input("第二个 SSH 会话已成功登录后输入 VERIFIED：").strip() == "VERIFIED"
             except EOFError:
                 return False
-        print(SSHManager().change(user=user, address=address, current_port=current_port,
-                                  new_port=new_port, remove_port=remove_port, key_only=key_only, verify=verify))
+        result = SSHManager().change(user=user, address=address, current_port=current_port,
+                                     new_port=new_port, remove_port=remove_port, key_only=key_only, verify=verify)
+        print(result)
+        if new_port is not None or remove_port is not None:
+            try:
+                from . import fail2ban
+                if Path("/etc/fail2ban/jail.d/50-vps-script-sshd.local").exists():
+                    print(fail2ban.Fail2banManager().refresh_ports())
+            except Exception as exc:
+                # 端口已经变更；Fail2ban 刷新失败只提示，不影响 SSH 结果。
+                print(f"Fail2ban 端口刷新未完成：{exc}")
         return 0
     except EOFError:
         print("已取消。")

@@ -19,6 +19,13 @@ class LocalInstallerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("用法", result.stderr)
 
+    def test_upgrade_is_refused_without_linux_root_tty(self):
+        project = Path(__file__).resolve().parents[1]
+        result = subprocess.run(("/bin/bash", str(project / "install-local.sh"), "--upgrade"),
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue("Linux" in result.stderr or "root" in result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,27 +1,79 @@
 # VPS-Script
 
-这是一个正在开发中的 VPS 初始化与日常管理工具。目标是在 SSH 终端中提供清晰的菜单，让使用者按需安装、配置、检查和维护服务，并在高风险操作前显示影响和恢复方式。
+面向 Ubuntu / Debian 新 VPS 的初始化与日常管理面板。在 SSH 终端里按需选择功能，执行前显示影响，执行后给出只读状态；默认只读，修改需要显式启用。
 
-当前阶段：**本地开发原型**。尚未在 Linux 虚拟机或真实 VPS 上验证，不可用于生产。默认模式只提供查询；APT、3x-ui、BBR/fq、SSH、UFW、Fail2ban 和 Hy2 的修改功能均是默认关闭的试验代码，只能在有控制台和备份的可丢弃测试环境中验证。
+当前版本：**v0.3.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
 
-`dist/vps-script-v0.1.0-dev.tar.gz` 是修复 UFW 预检前的旧测试包，请不要使用。更新的开发包也尚未通过 Linux 和 VPS 验证。
+## 一键安装 / 升级
 
-已确定首版使用 SSH 终端菜单，面向 Ubuntu 和 Debian；具体发行版版本和架构的支持情况以测试结果为准。详细需求、设计取舍、实施顺序和验收标准见 [项目计划](docs/PLAN.md)。
-
-## 体验原型
-
-需要 Bash 和 Python 3；不会自动安装依赖。在本项目目录运行：
+在测试 VPS 的 root SSH 终端运行：
 
 ```bash
-./vps-admin --demo
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh -o "$f" && sudo bash "$f" && rm -f "$f"
 ```
 
-演示模式使用虚构数据，不查询当前系统。在 Linux 上，`./vps-admin` 可以进入只读菜单，`./vps-admin status` 可以输出全部检查；也可以通过 `status system`、`status network`、`status security` 或 `status panel` 查询单项。检查不发起公网探测；某些本地状态需要 root 才能读取，权限不足显示为未知。列表中的监听地址、规则和 IP 等仍可能属于敏感信息，分享前应检查并遮盖。
+脚本会下载并校验固定版本的入口和测试包，然后要求输入 `YES` 确认。安装到 `/opt/vps-script`，启动命令为 `/usr/local/bin/vps-script`；重复运行同一命令会升级程序目录，保留 `/etc`、`/var` 中的 SSH、防火墙、BBR、Hy2 和 3x-ui 配置。
 
-试验功能会检查系统、权限和交互终端，并在执行前说明影响和要求确认；具体限制与未验证事项见 [开发与验证说明](docs/DEVELOPMENT.md)，实际验证顺序见 [测试计划](docs/TESTING.md)。[本地安装说明](docs/INSTALLATION.md)提供安装路径预览。[GitHub 测试版一键入口](https://github.com/SkyDream-Jack/VPS-Script/blob/main/test-releases/v0.2.0-dev/INSTALL.md)只有对应代码和测试包实际上传后才可用。
+> 短入口本身没有在命令行中固定 SHA-256；它会校验随后下载的 `bootstrap.py` 和测试包。需要先审查或固定入口摘要时，使用 [最新测试说明](https://github.com/SkyDream-Jack/VPS-Script/blob/main/test-releases/latest/INSTALL.md) 中的完整摘要和可审查命令。
 
-本地测试：
+安装完成后会自动进入修改模式菜单。之后：
 
 ```bash
+vps-script              # 只读模式
+vps-script --experimental   # 修改模式
+vps-script status       # 全部只读状态
+```
+
+## 面板模块
+
+| 模块 | 能做什么 | 执行后查看 |
+| --- | --- | --- |
+| 系统概览 | 发行版、内核、架构、内存、磁盘、运行时间、systemd | `status system` |
+| 系统软件 | APT 索引更新、升级、基础/网络/监控/安全工具安装 | `status packages` |
+| 3x-ui | 检测现有安装、固定版本安装、读取面板端口/路径（不读密码） | `status panel` |
+| BBR / fq | 检查、启用、恢复；记录原值；需要时写入 `tcp_bbr` 开机加载 | `status bbr` |
+| SSH | 新增端口、关闭项目旧端口、仅公钥认证、放行 UFW 新端口 | `status ssh` |
+| UFW | 查看规则、允许/删除端口、带 180 秒超时恢复的首次启用 | `status ufw` |
+| Fail2ban | 查看 jail/封禁计数、创建项目 SSH jail、SSH 端口变化后刷新、解封 IP | `status fail2ban` |
+| Hy2 | 创建/移除项目专属 nftables 跳跃端口转发和开机服务，可选放行 UFW | `status hy2` |
+| 常用工具 | swap 创建/移除、时区查看/设置、DNS 只读查看 | `status swap`、`status timezone`、`status dns` |
+| 状态查询 | 单项/分组/全部状态，支持 JSON | `status --json` |
+
+状态分组别名：`network` = BBR + Hy2，`security` = SSH + UFW + Fail2ban，`common` = swap + 时区 + DNS。
+
+```bash
+vps-script status security
+vps-script status --json > /tmp/vps-status.json
+vps-script doctor
+```
+
+所有状态查询只读：不发起公网探测，不读取面板账户/密码，不显示 Fail2ban 封禁 IP 列表。监听地址、规则和 IP 仍可能敏感，分享前请遮盖。
+
+## 安全边界（当前版本）
+
+- 修改功能要求 Linux、Ubuntu/Debian、root、交互式终端，并且逐项确认；默认菜单只读。
+- SSH 和 UFW 的 180 秒超时恢复使用 systemd 瞬态定时器，不保证跨重启；启用前请准备服务商控制台。
+- UFW 首次启用会检查默认入站策略必须为 `deny`；已有 nftables/iptables 规则、Docker、firewalld 或 nftables.service 时可能保守停止。Fail2ban 与 UFW 的先后顺序需要按提示操作。
+- 关闭密码登录会影响**所有账户**；面板只验证当前执行账户的公钥，其他账户是否有可用公钥需要自行确认。
+- Hy2 只管理项目专属 NAT 表，不修改云防火墙；必须在云厂商控制台放行 UDP 跳跃范围和目标端口，并从外部网络实测客户端。
+- 3x-ui 安装脚本以 root 运行且会访问 GitHub/APT/公网 IP 查询服务；项目固定了版本和入口摘要，但上游包和可选证书步骤仍有各自信任边界。
+- swap 只管理 `/swapfile-vps-script` 和带标记的 fstab 行；已有其他 swap 时停止。
+- 软件包升级、3x-ui 安装、内核/服务重启无法保证完整回滚；重要机器请先快照。
+
+## 本地开发
+
+```bash
+./vps-admin --demo                 # 虚构数据，不检查本机
+./vps-admin status --demo
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 ```
+
+本地安装（Linux、root、交互式终端，不下载）：
+
+```bash
+bash install-local.sh --preview
+bash install-local.sh
+bash install-local.sh --upgrade
+```
+
+详细设计、验证清单和审查记录见 [项目计划](docs/PLAN.md)、[开发说明](docs/DEVELOPMENT.md)、[测试计划](docs/TESTING.md) 和 [审查与改进记录](docs/REVIEW.md)。

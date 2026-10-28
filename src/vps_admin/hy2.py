@@ -14,7 +14,7 @@ import stat
 import subprocess
 import tempfile
 
-from . import bbr, checks, packages
+from . import bbr, checks, firewall, packages
 
 TABLE = "vps_script_hy2"
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
@@ -282,6 +282,33 @@ class Hy2Manager:
             if temp is not None:
                 os.unlink(temp)
 
+    def _cleanup_apply(self, nft, spec):
+        """应用失败时只清理本项目已创建的对象；无法确认时保留状态供人工恢复。"""
+        systemctl = checks.find_command("systemctl")
+        if systemctl:
+            self.run((systemctl, "disable", "--now", UNIT_NAME), check=False)
+        for family in spec.families:
+            self.run((nft, "delete", "table", family, TABLE), check=False)
+        for path in (self.config, self.unit):
+            if os.path.lexists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        if systemctl:
+            self.run((systemctl, "daemon-reload"), check=False)
+        own = True
+        try:
+            own, _ = nat_conflicts(self.ruleset(nft), spec.families)
+        except (Hy2Failure, bbr.BBRFailure, OSError):
+            own = True
+        if not own and not os.path.lexists(self.config) and not os.path.lexists(self.unit):
+            if os.path.lexists(self.state):
+                try:
+                    os.unlink(self.state)
+                except OSError:
+                    pass
+
     def apply(self, spec):
         spec.validate()
         with self.files.locked():
@@ -306,7 +333,9 @@ class Hy2Manager:
                 digests = {family: self.table_digest(nft, family) for family in spec.families}
                 self._replace_state(initial, self._state_bytes(spec, nft, digests))
             except (Hy2Failure, bbr.BBRFailure, OSError) as exc:
-                raise Hy2Failure(f"应用未完成；可能保留了项目文件或状态，请检查后恢复：{exc}") from exc
+                if any(os.path.lexists(path) for path in (self.state, self.config, self.unit)):
+                    self._cleanup_apply(nft, spec)
+                raise Hy2Failure(f"应用未完成；已尝试清理项目文件和规则：{exc}") from exc
             return "项目转发规则和开机服务已创建；重启持久化与公网客户端连接仍需独立验证。"
 
     def remove(self):
@@ -340,7 +369,23 @@ class Hy2Manager:
             return "已移除本项目的转发和开机服务；未改动 UFW 或云防火墙。"
 
 
-def change(spec=None, remove=False, experimental=False):
+def allow_ufw(spec):
+    """在 UFW 已启用时放行跳跃范围和目标 UDP 端口；失败只提示。"""
+    try:
+        manager = firewall.FirewallManager()
+        ufw = manager.command("ufw")
+        if manager.status(ufw) != "active":
+            return "UFW 未启用；没有添加规则。启用 UFW 前请先规划 SSH 和业务端口。"
+        messages = [
+            manager.allow(spec.start, spec.end, "udp"),
+            manager.allow(spec.target, spec.target, "udp"),
+        ]
+        return "UFW 已添加 UDP 跳跃范围和目标端口规则；云防火墙仍需单独放行。\n" + "\n".join(messages)
+    except (firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
+        return f"UFW 规则未添加：{exc}；请手动放行 UDP {spec.start}-{spec.end} 和目标 {spec.target}。"
+
+
+def change(spec=None, remove=False, allow_firewall=False, experimental=False):
     error = packages.preflight(experimental)
     if error:
         print(f"未执行：{error}")
@@ -358,7 +403,11 @@ def change(spec=None, remove=False, experimental=False):
             print(f"参数无效：{exc}")
             return 2
         print(f"接口 {spec.interface}：UDP {spec.start}-{spec.end} 转发到 {spec.target}；地址族 {', '.join(spec.families)}。")
-        print("只创建项目专用 nftables 表和 systemd 服务；不会修改 UFW、云防火墙或客户端。")
+        print("只创建项目专用 nftables 表和 systemd 服务；不会修改云防火墙或客户端。")
+        if allow_firewall:
+            print("应用成功后会尝试在 UFW 中放行跳跃范围和目标 UDP 端口。")
+        else:
+            print("不会自动修改 UFW；请自行确认主机防火墙放行。")
         print("请先确认云防火墙允许跳跃范围，主机防火墙允许转发后的目标 UDP 端口，且客户端支持并使用该范围。")
         print("遇到其他 NAT prerouting 规则、旧版 NAT 表或监听冲突时将停止。")
     try:
@@ -369,7 +418,12 @@ def change(spec=None, remove=False, experimental=False):
         print("已取消。")
         return 0
     try:
-        print(Hy2Manager().remove() if remove else Hy2Manager().apply(spec))
+        result = Hy2Manager().remove() if remove else Hy2Manager().apply(spec)
+        print(result)
+        if not remove and allow_firewall:
+            print(allow_ufw(spec))
+        if remove:
+            print("UFW 中此前为 Hy2 添加的规则不会自动删除；如需要请手动检查。")
         return 0
     except (Hy2Failure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")

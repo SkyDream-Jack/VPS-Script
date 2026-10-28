@@ -95,7 +95,8 @@ def source_origins(root: Path = Path("/etc/apt")):
 def apt_env():
     """避免把任意代码注入类环境变量传给 root 子进程，保留常见代理设置。"""
     env = {"PATH": SAFE_PATH, "HOME": "/root"}
-    for name in (*PROXY_VARS, "LANG", "LC_ALL", "TERM", "APT_CONFIG"):
+    # 不继承 APT_CONFIG：它能让调用者改变 APT 的配置目录、钩子和来源。
+    for name in (*PROXY_VARS, "LANG", "LC_ALL", "TERM"):
         if name in os.environ:
             env[name] = os.environ[name]
     return env
@@ -161,7 +162,7 @@ def run_action(name: str, experimental: bool = False) -> int:
     if any(os.environ.get(name) for name in PROXY_VARS):
         print("检测到代理环境变量；不会显示其中的地址或凭据。")
     if os.environ.get("APT_CONFIG"):
-        print("检测到 APT_CONFIG；APT 可能使用自定义配置。")
+        print("检测到 APT_CONFIG；为避免改变 APT 配置/钩子，未传入子进程。")
 
     args = apt_command(action)
     print("执行命令：" + " ".join(shlex.quote(value) for value in args), flush=True)

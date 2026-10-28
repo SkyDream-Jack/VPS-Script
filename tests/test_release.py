@@ -136,13 +136,30 @@ class ReleaseTest(unittest.TestCase):
             self.assertEqual(bootstrap.main(["v0.2.0-dev", "a" * 64, "--start-menu"]), 1)
         self.assertEqual(run.call_count, 1)
 
+    def test_short_install_script_pins_both_digests(self):
+        script = prepare_test_version.install_script_for(
+            "v0.3.0-dev", "a" * 64, "b" * 64)
+        self.assertIn("VERSION='v0.3.0-dev'", script)
+        self.assertIn("BOOTSTRAP_SHA='" + "a" * 64 + "'", script)
+        self.assertIn("ARCHIVE_SHA='" + "b" * 64 + "'", script)
+        self.assertIn("--upgrade --start-menu", script)
+        self.assertIn("sha256(open(sys.argv[1]", script.replace("\n", ""))
+
+    def test_document_uses_short_command_and_mentions_limits(self):
+        document = prepare_test_version.document_for(
+            "v0.3.0-dev", prepare_test_version.short_command("https://example.invalid/install.sh"),
+            "a" * 64, "b" * 64, "c" * 64)
+        self.assertIn("sudo bash", document)
+        self.assertIn("短入口", document)
+        self.assertIn("可丢弃", document)
+
     def test_one_line_entry_verifies_bootstrap_before_execution(self):
         body = b'outcome.append("verified")'
         digest = hashlib.sha256(body).hexdigest()
         command = prepare_test_version.command_for("v0.2.0-dev", digest, "a" * 64)
         args = shlex.split(command)
         self.assertEqual(args[:3], ["/usr/bin/python3", "-I", "-c"])
-        self.assertEqual(args[4:], ["v0.2.0-dev", "a" * 64, "--start-menu"])
+        self.assertEqual(args[4:], ["v0.2.0-dev", "a" * 64, "--upgrade", "--start-menu"])
         opener = MagicMock()
         opener.open.return_value.read.return_value = body
         namespace = {"outcome": []}

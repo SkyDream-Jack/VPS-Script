@@ -27,6 +27,7 @@ COMMANDS = {
     "sshd_config": ("sshd", "-T"),
     "hy2_ipv4": ("nft", "list", "table", "ip", "vps_script_hy2"),
     "hy2_ipv6": ("nft", "list", "table", "ip6", "vps_script_hy2"),
+    "hy2_service": ("systemctl", "show", "vps-script-hy2.service", "--property=LoadState,ActiveState,SubState,UnitFileState"),
 }
 SSH_CONFIG_KEYS = frozenset({
     "port", "listenaddress", "passwordauthentication", "kbdinteractiveauthentication",
