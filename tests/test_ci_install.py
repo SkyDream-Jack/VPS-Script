@@ -1,7 +1,9 @@
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -13,6 +15,64 @@ SPEC.loader.exec_module(ci_install)
 
 
 class CheckoutInstallerCITest(unittest.TestCase):
+    def test_pinned_baseline_uses_its_own_file_set(self):
+        asset = (ci_install.PROJECT / "test-releases" / ci_install.BASELINE_VERSION
+                 / f"vps-script-{ci_install.BASELINE_VERSION}.tar.gz")
+        with tempfile.TemporaryDirectory() as directory:
+            root, names = ci_install.unpack_baseline(asset.read_bytes(), Path(directory))
+            self.assertEqual(ci_install.source_version(root), "0.5.1-dev")
+            self.assertNotIn("src/vps_admin/backup.py", names)
+            self.assertIn("src/vps_admin/backup.py", ci_install.INSTALLED_FILES)
+            ci_install.verify_tree(root, root, names + ("install-local.sh", "bootstrap.py"))
+
+    def test_changed_baseline_is_rejected_before_parsing_or_loading_code(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(ci_install.tarfile, "open", side_effect=AssertionError("must not parse")), \
+                self.assertRaisesRegex(RuntimeError, "pinned digest"):
+            ci_install.unpack_baseline(b"tampered historical package", Path(directory))
+
+    def test_canary_detects_backup_data_changes_in_private_fixture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "backups"
+            ci_install.create_backup_canary(root)
+            ci_install.verify_backup_canary(root)
+            with self.assertRaisesRegex(RuntimeError, "existing backup storage"):
+                ci_install.create_backup_canary(root)
+            (root / ".ci-preservation-canary").write_bytes(b"changed")
+            with self.assertRaisesRegex(RuntimeError, "data changed"):
+                ci_install.verify_backup_canary(root)
+
+    def test_installed_backup_entrypoints_use_installed_modules_and_empty_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "backups"
+            ci_install.create_backup_canary(root)
+            ci_install.verify_backup_canary(root)
+            (root / ".ci-preservation-canary").unlink()
+            payload = {"schema": 1, "storage": str(root), "records": []}
+            with patch.object(ci_install, "BACKUP_ROOT", root), \
+                    patch.object(ci_install.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(payload))) as run:
+                ci_install.verify_backup_entrypoints()
+            import_command = run.call_args_list[0].args[0]
+            self.assertEqual(import_command[:4], ("/usr/bin/python3", "-I", "-B", "-c"))
+            self.assertEqual(import_command[-1], str(ci_install.DESTINATION / "src"))
+            self.assertIn("backup, backup_access, backup_network", import_command[4])
+            self.assertEqual(run.call_args_list[1].args[0], (str(ci_install.LAUNCHER), "history", "--json"))
+
+    def test_installed_backup_entrypoints_reject_nonempty_or_created_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = {"schema": 1, "storage": str(root), "records": [{"id": "unexpected"}]}
+            with patch.object(ci_install, "BACKUP_ROOT", root), \
+                    patch.object(ci_install.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(payload))), \
+                    self.assertRaisesRegex(RuntimeError, "valid empty"):
+                ci_install.verify_backup_entrypoints()
+            payload["records"] = []
+            (root / "unexpected").touch()
+            with patch.object(ci_install, "BACKUP_ROOT", root), \
+                    patch.object(ci_install.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(payload))), \
+                    self.assertRaisesRegex(RuntimeError, "created unexpected"):
+                ci_install.verify_backup_entrypoints()
+
     def test_missing_github_environment_stops_before_any_mutation(self):
         with patch.dict(os.environ, {}, clear=True), \
                 patch.object(ci_install.platform, "system", return_value="Linux"), \

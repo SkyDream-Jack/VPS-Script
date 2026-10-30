@@ -15,6 +15,14 @@ from vps_admin import cli, panel
 
 
 class PanelInstallerTest(unittest.TestCase):
+    def setUp(self):
+        tracker = patch.object(panel.backup, "track", side_effect=lambda module, action, operation, **kwargs: operation())
+        snapshot = patch.object(panel.backup, "confirm_external_snapshot", return_value=True)
+        self.addCleanup(tracker.stop)
+        self.addCleanup(snapshot.stop)
+        tracker.start()
+        snapshot.start()
+
     def test_default_gate_never_downloads(self):
         with patch.object(panel.packages, "preflight", return_value="默认关闭"), \
              patch.object(panel, "download_installer") as download, \
@@ -71,6 +79,18 @@ class PanelInstallerTest(unittest.TestCase):
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(panel.install(experimental=True), 0)
         run.assert_not_called()
+
+    def test_environment_changed_during_snapshot_confirmation_or_journal_blocks_script(self):
+        with patch.object(panel, "check_environment", side_effect=[None, None, "发现现有安装"]), \
+             patch.object(panel, "download_installer", return_value=b"not executed"), \
+             patch.object(panel.tempfile, "NamedTemporaryFile") as temporary, \
+             patch.object(panel.subprocess, "run") as run, \
+             patch("builtins.input", side_effect=["YES", "YES"]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(panel.install(experimental=True), 2)
+        temporary.assert_not_called()
+        run.assert_not_called()
+        self.assertIn("未启动安装程序", output.getvalue())
 
     def test_installer_is_executed_with_restricted_environment_and_cleaned_up(self):
         original_named_temp = tempfile.NamedTemporaryFile

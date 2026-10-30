@@ -1,4 +1,4 @@
-# VPS-Script v0.6.0-dev 测试版
+# VPS-Script v0.7.0-dev 测试版
 
 **仅用于可丢弃的 Ubuntu / Debian 测试 VPS。** 尚未完成真实 Linux、SSH、防火墙或 Hy2 端到端验证，不可用于生产。请先准备服务商控制台恢复途径和两个独立 SSH 会话。
 
@@ -14,15 +14,15 @@ f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Sc
 <summary>可审查的 Python 单行命令（已固定入口和测试包摘要）</summary>
 
 ```bash
-/usr/bin/python3 -I -c 'import os,sys,hashlib,urllib.request; sys.platform.startswith("linux") and os.geteuid()==0 and sys.stdin.isatty() and sys.stdout.isatty() or sys.exit("请在测试 VPS 的交互式 root SSH 终端运行"); u="https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.6.0-dev/bootstrap.py"; h=type("NoRedirect",(urllib.request.HTTPRedirectHandler,),{"redirect_request":lambda *a,**k:None}); d=urllib.request.build_opener(h()).open(u,timeout=20).read(200001); len(d)<=200000 and hashlib.sha256(d).hexdigest()=="964d399076628353a30b573f8a3aa18d9f326cd71289ac9c0f031c967ddd61a7" or sys.exit("下载入口校验失败"); exec(compile(d,u,"exec"))' v0.6.0-dev adcb6298989093f771d15eddebc344f9a628d9fb0af5ff31fe29365962acf4e1 --upgrade --start-menu
+/usr/bin/python3 -I -c 'import os,sys,hashlib,urllib.request; sys.platform.startswith("linux") and os.geteuid()==0 and sys.stdin.isatty() and sys.stdout.isatty() or sys.exit("请在测试 VPS 的交互式 root SSH 终端运行"); u="https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.7.0-dev/bootstrap.py"; h=type("NoRedirect",(urllib.request.HTTPRedirectHandler,),{"redirect_request":lambda *a,**k:None}); d=urllib.request.build_opener(h()).open(u,timeout=20).read(200001); len(d)<=200000 and hashlib.sha256(d).hexdigest()=="589d8de4107c84d748763ff9207870059d6dde52723c47d50cf0c7cd9346320a" or sys.exit("下载入口校验失败"); exec(compile(d,u,"exec"))' v0.7.0-dev 709eae9468f5907c7b8276173dd9436650657775b36fcc9e215e35226f5fb66c --upgrade --start-menu
 ```
 
 </details>
 
 升级：再次运行同一命令即可；会替换 `/opt/vps-script`，保留 `/etc`、`/var` 中的系统配置。安装路径为 `/opt/vps-script`，启动命令为 `/usr/local/bin/vps-script`。之后以 root 运行 `vps-script --experimental` 打开修改菜单；`vps-script` 默认只读。更新与卸载系统配置仍需使用各模块自己的恢复/移除功能。
 
-入口 SHA-256：`964d399076628353a30b573f8a3aa18d9f326cd71289ac9c0f031c967ddd61a7`
+入口 SHA-256：`589d8de4107c84d748763ff9207870059d6dde52723c47d50cf0c7cd9346320a`
 
-测试包 SHA-256：`adcb6298989093f771d15eddebc344f9a628d9fb0af5ff31fe29365962acf4e1`
+测试包 SHA-256：`709eae9468f5907c7b8276173dd9436650657775b36fcc9e215e35226f5fb66c`
 
-短入口 SHA-256：`88060d87bac43a32187a307319b5e5c4cc202e2d7f8efac282eaad0e96889f22`
+短入口 SHA-256：`212c1dba0378f337bd6202aa14163db68ac66aeb6f28590b63b70d1098f37749`

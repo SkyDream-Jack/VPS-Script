@@ -173,7 +173,7 @@ class OperationRoutingTest(unittest.TestCase):
         ("ssh_menu", "3", [], cli.ssh, "change", (), {"key_only": True, "experimental": True}),
         ("ufw_menu", "1", ["20000", "20100", "udp"], cli.firewall, "allow", (20000, 20100, "udp"), {"experimental": True}),
         ("ufw_menu", "2", [], cli.firewall, "enable", (), {"experimental": True}),
-        ("ufw_menu", "3", ["443", "", "tcp", "YES"], cli.firewall.FirewallManager, "delete", (443, 443, "tcp"), {}),
+        ("ufw_menu", "3", ["443", "", "tcp"], cli.firewall, "delete", (443, 443, "tcp"), {"experimental": True}),
         ("fail2ban_menu", "1", [], cli.fail2ban, "configure", (), {"experimental": True}),
         ("fail2ban_menu", "2", ["192.0.2.10"], cli.fail2ban, "unban", ("192.0.2.10",), {"experimental": True}),
         ("panel_menu", "1", [], cli.panel, "install", (), {"experimental": True}),

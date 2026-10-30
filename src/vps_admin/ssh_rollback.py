@@ -44,9 +44,15 @@ def run(tx_dir, *, target_override=None, runner=subprocess.run):
         if current is not None and len(current) > 65_536:
             return 2
         expected_hash = state.get("after_sha256")
-        if current is not None and hashlib.sha256(current).hexdigest() == expected_hash:
+        after_exists = state.get("after_exists", True)  # Old transaction copies always wrote a file.
+        if type(after_exists) is not bool or (not after_exists and expected_hash is not None):
+            return 2
+        matches_after = ((after_exists and current is not None and hashlib.sha256(current).hexdigest() == expected_hash)
+                         or (not after_exists and current is None))
+        if matches_after:
             if before is None:
-                os.unlink(target)
+                if current is not None:
+                    os.unlink(target)
             else:
                 fd, temporary = tempfile.mkstemp(prefix=".vps-script-rollback-", dir=str(target.parent))
                 try:

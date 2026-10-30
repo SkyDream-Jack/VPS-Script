@@ -12,7 +12,7 @@ import shutil
 import stat
 import subprocess
 
-from . import checks, packages
+from . import backup, checks, packages
 
 SWAP_PATH = "/swapfile-vps-script"
 FSTAB_LINE = "/swapfile-vps-script none swap sw 0 0 # Managed by VPS-Script\n"
@@ -270,7 +270,7 @@ def change(remove=False, size_mb=None, experimental=False):
             if input("输入 YES 继续，其他内容取消：").strip() != "YES":
                 print("已取消。")
                 return 0
-            print(manager.remove())
+            print(backup.track("swap", "remove", manager.remove))
             return 0
         print("\n【试验功能】创建项目 swap 文件；不会修改其他 swap 或 fstab 行。")
         print("已有其他 swap 时会停止；创建后写入 fstab，重启自动启用尚未验证。")
@@ -284,9 +284,9 @@ def change(remove=False, size_mb=None, experimental=False):
         if input("输入 YES 继续，其他内容取消：").strip() != "YES":
             print("已取消。")
             return 0
-        print(manager.create(size_mb))
+        print(backup.track("swap", "create", lambda: manager.create(size_mb)))
         return 0
-    except (SwapFailure, OSError) as exc:
+    except (SwapFailure, backup.BackupFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1
     except EOFError:

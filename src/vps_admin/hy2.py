@@ -14,7 +14,7 @@ import stat
 import subprocess
 import tempfile
 
-from . import bbr, checks, firewall, packages
+from . import backup, bbr, checks, firewall, packages
 
 TABLE = "vps_script_hy2"
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
@@ -377,12 +377,14 @@ def allow_ufw(spec):
         if manager.status(ufw) != "active":
             return "UFW 未启用；没有添加规则。启用 UFW 前请先规划 SSH 和业务端口。"
         messages = [
-            manager.allow(spec.start, spec.end, "udp"),
-            manager.allow(spec.target, spec.target, "udp"),
+            backup.track("ufw", "allow", lambda: manager.allow(spec.start, spec.end, "udp"),
+                         details={"action": "Hy2 UDP 跳跃范围放行"}),
+            backup.track("ufw", "allow", lambda: manager.allow(spec.target, spec.target, "udp"),
+                         details={"action": "Hy2 UDP 目标端口放行"}),
         ]
         return "UFW 已添加 UDP 跳跃范围和目标端口规则；云防火墙仍需单独放行。\n" + "\n".join(messages)
-    except (firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
-        return f"UFW 规则未添加：{exc}；请手动放行 UDP {spec.start}-{spec.end} 和目标 {spec.target}。"
+    except (firewall.FirewallFailure, bbr.BBRFailure, backup.BackupFailure, OSError) as exc:
+        return f"UFW 放行未全部完成：{exc}；此前成功的规则保留并单独记录，请检查 UDP {spec.start}-{spec.end} 和目标 {spec.target}。"
 
 
 def change(spec=None, remove=False, allow_firewall=False, experimental=False):
@@ -418,13 +420,15 @@ def change(spec=None, remove=False, allow_firewall=False, experimental=False):
         print("已取消。")
         return 0
     try:
-        result = Hy2Manager().remove() if remove else Hy2Manager().apply(spec)
+        manager = Hy2Manager()
+        operation = manager.remove if remove else lambda: manager.apply(spec)
+        result = backup.track("hy2", "remove" if remove else "apply", operation)
         print(result)
         if not remove and allow_firewall:
             print(allow_ufw(spec))
         if remove:
             print("UFW 中此前为 Hy2 添加的规则不会自动删除；如需要请手动检查。")
         return 0
-    except (Hy2Failure, bbr.BBRFailure, OSError) as exc:
+    except (Hy2Failure, bbr.BBRFailure, backup.BackupFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

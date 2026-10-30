@@ -8,7 +8,7 @@ import stat
 import subprocess
 import tempfile
 
-from . import bbr, checks, packages
+from . import backup, bbr, checks, packages
 
 JAIL = "vps-script-sshd"
 HEADER = "# Managed by VPS-Script; do not edit while managed.\n"
@@ -216,21 +216,27 @@ def configure(experimental=False):
         if input("输入 YES 继续，其他内容取消：").strip() != "YES":
             print("已取消。")
             return 0
-        print(Fail2banManager().configure())
+        print(backup.track("fail2ban", "configure", lambda: Fail2banManager().configure()))
         return 0
     except EOFError:
         print("已取消。")
         return 0
-    except (Fail2banFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, Fail2banFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1
 
 
 def refresh_ports():
     try:
-        print(Fail2banManager().refresh_ports())
+        manager = Fail2banManager()
+        try:
+            os.lstat(manager.config)
+        except FileNotFoundError:
+            print("未发现项目 jail；没有更新，也未创建备份记录。")
+            return 0
+        print(backup.track("fail2ban", "refresh-ports", manager.refresh_ports))
         return 0
-    except (Fail2banFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, Fail2banFailure, bbr.BBRFailure, OSError) as exc:
         print(f"Fail2ban 端口刷新未完成：{exc}")
         return 1
 
@@ -241,8 +247,9 @@ def unban(address, experimental=False):
         print(f"未执行：{error}")
         return 2
     try:
-        print(Fail2banManager().unban(address))
+        print(backup.track("fail2ban", "unban", lambda: Fail2banManager().unban(address), restore_supported=False,
+                           details={"limitation": "解封仅记录操作，不重新封禁 IP 或恢复动态封禁时长"}))
         return 0
-    except (Fail2banFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, Fail2banFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

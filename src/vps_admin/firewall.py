@@ -12,7 +12,7 @@ import shlex
 import stat
 import subprocess
 
-from . import bbr, checks, packages
+from . import backup, bbr, checks, packages
 
 
 class FirewallFailure(Exception):
@@ -197,15 +197,19 @@ class FirewallManager:
         with self.files.locked():
             ufw = self.command("ufw")
             current = self.status(ufw)
-            if current == "active" and protocol == "tcp":
-                try:
-                    current_port = ssh_session_port(os.environ.get("SSH_CONNECTION", ""))
-                except FirewallFailure as exc:
-                    raise FirewallFailure("无法确认当前 SSH 端口；为防止断连，拒绝删除活动 UFW 的 TCP 规则") from exc
-                if start <= current_port <= end:
-                    raise FirewallFailure(f"不能删除包含当前 SSH 端口 {current_port}/tcp 的允许规则；请先通过其他已放行端口建立 SSH 会话")
+            self.guard_delete(start, end, protocol, current)
             result = self.run((ufw, "delete", "allow", rule))
             return f"UFW 当前为 {current}；删除规则命令已执行。\n{result.stdout.strip()}\n请检查是否仍有其他规则放行该端口。"
+
+    @staticmethod
+    def guard_delete(start, end, protocol, current):
+        if current == "active" and protocol == "tcp":
+            try:
+                current_port = ssh_session_port(os.environ.get("SSH_CONNECTION", ""))
+            except FirewallFailure as exc:
+                raise FirewallFailure("无法确认当前 SSH 端口；为防止断连，拒绝删除活动 UFW 的 TCP 规则") from exc
+            if start <= current_port <= end:
+                raise FirewallFailure(f"不能删除包含当前 SSH 端口 {current_port}/tcp 的允许规则；请先通过其他已放行端口建立 SSH 会话")
 
     def enable(self, port, verify):
         if type(port) is not int or not 1 <= port <= 65535:
@@ -316,9 +320,32 @@ def allow(start, end, protocol, experimental=False):
         if not _confirm("输入 YES 继续，其他内容取消："):
             print("已取消。")
             return 0
-        print(FirewallManager().allow(start, end, protocol))
+        print(backup.track("ufw", "allow", lambda: FirewallManager().allow(start, end, protocol),
+                           details={"action": f"allow {rule}"}))
         return 0
-    except (FirewallFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, FirewallFailure, bbr.BBRFailure, OSError) as exc:
+        print(f"操作未完成：{exc}")
+        return 1
+
+
+def delete(start, end, protocol, experimental=False):
+    error = packages.preflight(experimental)
+    if error:
+        print(f"未执行：{error}")
+        return 2
+    try:
+        rule = port_rule(start, end, protocol)
+        print(f"将删除 allow {rule}；禁止删除当前活动 SSH 端口，删除前自动保存配置备份。")
+        print("删除规则涉及原有顺序，本次记录不提供自动重建规则；可查看历史备份供人工恢复。")
+        if not _confirm("输入 YES 删除，其他内容取消："):
+            print("已取消。")
+            return 0
+        print(backup.track("ufw", "delete", lambda: FirewallManager().delete(start, end, protocol),
+                           details={"action": f"delete allow {rule}",
+                                    "limitation": "删除规则不能安全地以追加规则恢复原顺序"},
+                           restore_supported=False))
+        return 0
+    except (backup.BackupFailure, FirewallFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1
 
@@ -342,8 +369,9 @@ def enable(experimental=False):
                 return input("第二个 SSH 会话已成功登录后输入 VERIFIED：").strip() == "VERIFIED"
             except EOFError:
                 return False
-        print(FirewallManager().enable(port, verify))
+        print(backup.track("ufw", "enable", lambda: FirewallManager().enable(port, verify),
+                           details={"action": f"enable; preserve SSH {port}/tcp", "limitation": "恢复首次启用仅关闭 UFW，保留新增 allow 规则"}))
         return 0
-    except (FirewallFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, FirewallFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

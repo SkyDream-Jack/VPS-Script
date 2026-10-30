@@ -10,7 +10,7 @@ import stat
 import subprocess
 import tempfile
 
-from . import checks, packages
+from . import backup, checks, packages
 
 TCP = "net.ipv4.tcp_congestion_control"
 QDISC = "net.core.default_qdisc"
@@ -303,8 +303,9 @@ def change(restore=False, experimental=False):
         print("已取消。")
         return 0
     try:
-        print(manager.restore() if restore else manager.apply(load_module=need_module))
+        operation = manager.restore if restore else lambda: manager.apply(load_module=need_module)
+        print(backup.track("bbr", "restore" if restore else "apply", operation))
         return 0
-    except (BBRFailure, OSError) as exc:
+    except (BBRFailure, backup.BackupFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

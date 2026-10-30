@@ -5,8 +5,8 @@
 - TcpQuality：GPL-3.0
 - YABS：WTFPL
 
-只在用户明确确认后下载并执行；不把远程内容管道进 bash，不固定上游摘要，
-下载后显示本次 SHA-256 供审查。测试可能安装软件、创建临时文件、访问大量
+先下载并显示本次 SHA-256，明确确认和持久记录后才执行；不把远程内容管道
+进 bash，不固定上游摘要。测试可能安装软件、创建临时文件、访问大量
 第三方节点并上传 IP/结果，必须在测试 VPS 上使用。
 """
 
@@ -20,7 +20,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from . import packages
+from . import backup, packages
 
 MAX_SCRIPT = 2_000_000
 ALLOWED_REDIRECT_HOSTS = frozenset({"raw.githubusercontent.com"})
@@ -156,8 +156,13 @@ def run(key, experimental=False):
     if input("输入 RUN 执行，其他内容取消：").strip() != "RUN":
         print("已取消。")
         return 0
+    if not backup.confirm_external_snapshot():
+        print("已取消；没有执行外部测试脚本。")
+        return 0
     path = None
-    try:
+    exit_code = 1
+    def execute():
+        nonlocal path, exit_code
         with tempfile.NamedTemporaryFile(prefix="vps-script-external-", suffix=".sh",
                                          dir="/run" if Path("/run").is_dir() else "/tmp",
                                          delete=False) as script:
@@ -176,13 +181,21 @@ def run(key, experimental=False):
         print(f"\n开始执行 {spec.title}；按 Ctrl-C 可中断。\n", flush=True)
         result = subprocess.run(("/bin/bash", path), cwd="/", env=env, check=False)
         if result.returncode != 0:
-            print(f"\n外部测试退出码 {result.returncode}；可能只完成部分测试。")
-            return result.returncode if result.returncode > 0 else 1
+            exit_code = result.returncode if result.returncode > 0 else 1
+            raise RuntimeError(f"外部测试退出码 {result.returncode}")
+        return result
+
+    try:
+        backup.track("external", key, execute, restore_supported=False, details={
+            "action": key, "source": spec.url, "script_sha256": digest,
+            "external_snapshot": "user_declared_unverified",
+            "limitation": "仅记录入口摘要和结果；第三方脚本的系统修改和上传不能自动回滚。",
+        })
         print("\n外部测试退出码为 0；结果仅代表本次网络/机器状态。")
         return 0
-    except OSError as exc:
-        print(f"无法执行外部测试：{exc}")
-        return 1
+    except (backup.BackupFailure, OSError) as exc:
+        print(f"外部测试或记录未完成：{exc}；脚本如已启动，可能只完成部分操作，请检查实际状态。")
+        return exit_code
     finally:
         if path is not None:
             try:

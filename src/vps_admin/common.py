@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import checks, packages
+from . import backup, checks, packages
 
 TIMEZONE_RE = re.compile(r"^(?:UTC|[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+)$")
 MAX_TIMEZONES = 2000
@@ -112,9 +112,9 @@ def timezone_change(experimental=False):
         if input("输入 YES 继续，其他内容取消：").strip() != "YES":
             print("已取消。")
             return 0
-        print(set_timezone(name))
+        print(backup.track("timezone", "set", lambda: set_timezone(name)))
         return 0
-    except (CommonFailure, EOFError) as exc:
+    except (CommonFailure, backup.BackupFailure, EOFError) as exc:
         print(f"操作未完成：{exc}")
         return 1
 

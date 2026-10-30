@@ -5,7 +5,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
+from . import __version__, backup, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
 
 DEMO = """【演示数据：不是本机或 VPS 的真实状态】
 系统：示例 Debian / Ubuntu
@@ -95,7 +95,7 @@ def _submenu(title, actions, *, demo=False, experimental=False, sections=None):
             return
         except ValueError:
             print("输入无效，已取消。")
-        except (bench.BenchFailure, external.ExternalFailure, firewall.FirewallFailure,
+        except (backup.BackupFailure, bench.BenchFailure, external.ExternalFailure, firewall.FirewallFailure,
                 bbr.BBRFailure, tuning.TuningFailure, OSError) as exc:
             print(f"操作未完成：{exc}")
 
@@ -155,11 +155,7 @@ def _ufw_rule(remove, experimental):
     end = int(end_text) if end_text else start
     protocol = input("协议（tcp / udp）：").strip().lower()
     if remove:
-        if input("输入 YES 删除对应 allow 规则：").strip() != "YES":
-            print("已取消。")
-            return
-        print(firewall.FirewallManager().delete(start, end, protocol))
-        show_status("ufw")
+        _change(lambda: firewall.delete(start, end, protocol, experimental=experimental), "ufw")
     else:
         _change(lambda: firewall.allow(start, end, protocol, experimental=experimental), "ufw")
 
@@ -338,14 +334,58 @@ def _uninstall_info():
 
 
 def _recovery_info():
-    print("现有恢复能力（不是整机备份）：")
-    print("SSH：变更前备份及定时回退；UFW：首次启用失败时尝试回退到 inactive，新增 allow 规则保留。")
+    print("统一记录保存于 /var/lib/vps-script/backups，仅 root 可读；选择“备份记录与恢复”查看。")
+    print("受支持的修改先保存备份，再执行；保存失败会阻止操作。不是整机或应用数据备份。")
+    print("SSH：恢复仍需定时回退及第二会话验证；UFW：只自动恢复可安全识别的新增规则/启用操作。")
     print("SSH/UFW 回退可能失败，且不保证跨重启；仍需保留第二会话和服务商控制台。")
     print("BBR / 调优：在“网络与调优”对应模块恢复记录的原值。")
     print("Hy2：在“代理服务”移除本项目转发；swap：在“系统与软件”移除本项目 swap。")
     print("安装器：升级失败恢复程序目录；不负责撤销系统配置。")
     print("APT / 3x-ui / 第三方脚本：无完整回滚；重大操作前使用服务商快照。")
-    print("统一自动备份、恢复记录与恢复入口计划下一步实现；当前没有一键恢复整机。")
+    print("历史恢复先核对当前状态，后续改动存在时拒绝覆盖；恢复本身也保存新记录。")
+    print("容量上限 100 条 / 32 MiB；满后停止记录和相关修改，不自动删除旧备份。")
+    print("失败/中断的记录保留供人工核查；初始化向导尚未实现。")
+
+
+def _choose_record():
+    rows = backup.history()["records"]
+    if not rows:
+        print("暂无备份记录。")
+        return None
+    for index, row in enumerate(rows, 1):
+        ability = "可请求恢复" if row["restore_supported"] else "仅查看"
+        print(f"{index}. {row['id']} | {backup._text(row['created_at'], 32)} | "
+              f"{backup._text(row['module'], 20)}/{backup._text(row['action'], 60)} | {ability}")
+    choice = input("选择记录编号或完整 ID（留空返回）：").strip()
+    if not choice:
+        return None
+    if choice.isdigit() and len(choice) <= 3 and 1 <= int(choice) <= len(rows):
+        return rows[int(choice) - 1]["id"]
+    if choice in {row["id"] for row in rows}:
+        return choice
+    print("无效记录。")
+    return None
+
+
+def _record_action(action, experimental=False):
+    identifier = _choose_record()
+    if identifier is None:
+        return
+    if action == "detail":
+        print(backup.render_history(backup.history(identifier)))
+    elif action == "restore":
+        backup.restore(identifier, experimental=experimental)
+    elif action == "delete":
+        backup.delete(identifier, experimental=experimental)
+
+
+def backup_menu(demo=False, experimental=False):
+    _submenu("备份记录与恢复", [
+        ("查看变更记录（只读）", lambda: print(backup.render_history(backup.history())), "read"),
+        ("选择记录查看详情（不显示配置正文）", lambda: _record_action("detail"), "read"),
+        ("选择记录恢复", lambda: _record_action("restore", experimental), "modify"),
+        ("选择已完成记录永久删除", lambda: _record_action("delete", experimental), "modify"),
+    ], demo=demo, experimental=experimental)
 
 
 def maintenance_menu(demo=False, experimental=False):
@@ -354,6 +394,7 @@ def maintenance_menu(demo=False, experimental=False):
         ("查看安装 / 升级命令", _upgrade_info, "info"),
         ("查看卸载说明", _uninstall_info, "info"),
         ("查看现有恢复能力", _recovery_info, "info"),
+        ("备份记录与恢复", lambda: backup_menu(demo=demo, experimental=experimental), "nav"),
     ], demo=demo, experimental=experimental)
 
 
@@ -407,24 +448,49 @@ def menu(demo=False, experimental=False) -> int:
 def main(argv=None) -> int:
     sections = tuple(status.SECTIONS) + tuple(status.ALIASES) + ("all",)
     parser = argparse.ArgumentParser(prog="vps-admin", description="VPS 初始化与日常管理工具")
-    parser.add_argument("action", nargs="?", choices=("menu", "status", "doctor", "version"), default="menu")
-    parser.add_argument("section", nargs="?", choices=sections, default="all")
+    parser.add_argument("action", nargs="?", choices=("menu", "status", "doctor", "version", "history", "restore"), default="menu")
+    parser.add_argument("section", nargs="?", default="all", help="状态分类或 history/restore 的记录 ID")
     parser.add_argument("--demo", action="store_true", help="展示虚构数据，不检查本机")
     parser.add_argument("--json", action="store_true", help="状态查询以 JSON 输出")
     parser.add_argument("--experimental", action="store_true", help="启用未通过真实 VPS 验证的系统修改")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
 
+    if args.action not in ("history", "restore") and args.section not in sections:
+        parser.error("未知状态分类")
+    if args.action in ("history", "restore") and args.section != "all" and not backup.ID_RE.fullmatch(args.section):
+        parser.error("记录 ID 必须是 32 位小写十六进制，不能输入路径")
+    if args.action == "restore" and args.section == "all":
+        parser.error("restore 必须指定记录 ID")
+
     if args.action == "version":
         print(__version__)
         return 0
     if args.action == "menu" and args.section != "all":
         parser.error("菜单模式不接受检查分类")
-    if args.json and args.action not in ("status", "doctor"):
-        parser.error("--json 只能与 status 或 doctor 一起使用")
+    if args.json and args.action not in ("status", "doctor", "history"):
+        parser.error("--json 只能与 status、doctor 或 history 一起使用")
     if not args.demo and platform.system() != "Linux":
         print("真实状态查询和修改仅在 Linux 上可用；可用 --demo 查看界面。", file=sys.stderr)
         return 2
+    if args.action == "history":
+        try:
+            payload = ({"schema": 1, "demo": True, "storage": "演示数据", "records": []} if args.demo
+                       else backup.history(None if args.section == "all" else args.section))
+            print(status.dumps(payload) if args.json else backup.render_history(payload))
+            return 0
+        except (backup.BackupFailure, OSError) as exc:
+            print(f"无法读取备份记录：{exc}", file=sys.stderr)
+            return 1
+    if args.action == "restore":
+        if args.demo:
+            print(DEMO)
+            return 0
+        try:
+            return backup.restore(args.section, experimental=args.experimental)
+        except KeyboardInterrupt:
+            print("\n恢复被中断，请查看记录及原模块回退结果。")
+            return 130
     if args.action == "menu":
         try:
             return menu(demo=args.demo, experimental=args.experimental)

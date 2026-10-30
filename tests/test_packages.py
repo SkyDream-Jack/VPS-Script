@@ -33,6 +33,19 @@ def disposable_linux():
 
 
 class PackageActionsTest(unittest.TestCase):
+    def setUp(self):
+        def recorded(module, action, operation, **kwargs):
+            try:
+                return operation()
+            except Exception as exc:
+                raise packages.backup.BackupFailure("recorded command failure") from exc
+        tracker = patch.object(packages.backup, "track", side_effect=recorded)
+        snapshot = patch.object(packages.backup, "confirm_external_snapshot", return_value=True)
+        self.addCleanup(tracker.stop)
+        self.addCleanup(snapshot.stop)
+        tracker.start()
+        snapshot.start()
+
     def test_default_gate_blocks_before_any_command(self):
         with patch.object(packages.subprocess, "run") as run, \
              contextlib.redirect_stdout(io.StringIO()) as output:

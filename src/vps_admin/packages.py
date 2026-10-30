@@ -15,7 +15,7 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
-from . import checks
+from . import backup, checks
 
 APT = "/usr/bin/apt-get"
 SAFE_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
@@ -189,15 +189,30 @@ def run_action(name: str, experimental: bool = False) -> int:
         print("已取消，没有执行 APT 修改命令。")
         return 0
 
-    print("\n开始执行；请关注交互提示，尽量避免中断软件包管理器。", flush=True)
-    try:
+    snapshot = name != "update"
+    if snapshot and not backup.confirm_external_snapshot():
+        print("已取消；没有执行 APT 修改命令。")
+        return 0
+
+    exit_code = 1
+    def execute():
+        nonlocal exit_code
+        print("\n开始执行；请关注交互提示，尽量避免中断软件包管理器。", flush=True)
         result = subprocess.run(args, check=False, env=env)
-    except OSError as exc:
-        print(f"无法启动 APT：{exc}")
-        return 1
-    if result.returncode != 0:
-        print(f"APT 返回退出码 {result.returncode}；可能已部分执行，请检查输出后处理。")
-        return result.returncode if result.returncode > 0 else 1
+        if result.returncode != 0:
+            exit_code = result.returncode if result.returncode > 0 else 1
+            raise RuntimeError(f"APT 返回退出码 {result.returncode}")
+        return result
+
+    try:
+        backup.track("packages", name, execute, restore_supported=False, details={
+            "action": name,
+            "external_snapshot": "user_declared_unverified" if snapshot else "not_required_for_index_update",
+            "limitation": "仅记录操作；不能自动回滚软件包、索引或维护脚本造成的变化。",
+        })
+    except (backup.BackupFailure, OSError) as exc:
+        print(f"APT 操作或记录未完成：{exc}；命令如已启动，可能已部分执行，请检查输出和状态。")
+        return exit_code
     print("APT 命令退出码为 0；请检查上方警告、服务状态以及是否需要重启。")
     if name == "update":
         print("部分源出错时 APT 仍可能使用旧索引，请检查上方警告。")

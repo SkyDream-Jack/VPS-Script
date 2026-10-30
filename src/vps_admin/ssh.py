@@ -13,7 +13,7 @@ import stat
 import subprocess
 import tempfile
 
-from . import bbr, checks, firewall, packages
+from . import backup, bbr, checks, firewall, packages
 
 HEADER = "# Managed by VPS-Script; do not edit while managed.\n"
 AUTH = {"passwordauthentication": "no", "kbdinteractiveauthentication": "no",
@@ -204,8 +204,12 @@ class SSHManager:
         current, _ = self._read_before()
         if current != before:
             raise SSHFailure("SSH 配置在操作期间发生变化")
+        if after is None:
+            if before is not None:
+                os.unlink(self.target)
+            return
         if before is None:
-            self.files._atomic_create(self.target, after, 0o644)
+            self.files._atomic_create(self.target, after, mode)
             return
         temporary = None
         try:
@@ -223,18 +227,33 @@ class SSHManager:
             if temporary is not None:
                 os.unlink(temporary)
 
-    def change(self, *, user, address, current_port, new_port=None, remove_port=None, key_only=False, verify=None):
+    def restore_snapshot(self, expected, desired, mode, *, user, address, current_port, verify, precheck=None):
+        """Restore only this project's drop-in using the normal guarded transaction."""
+        if any(value is not None and not isinstance(value, bytes) for value in (expected, desired)):
+            raise SSHFailure("历史 SSH 配置类型无效")
+        if type(mode) is not int or mode < 0 or mode > 0o777 or mode & 0o022:
+            raise SSHFailure("历史 SSH 配置权限无效")
+        read_managed(expected)
+        read_managed(desired)
+        return self.change(user=user, address=address, current_port=current_port, verify=verify,
+                           _restore=(expected, desired, mode), _restore_check=precheck)
+
+    def change(self, *, user, address, current_port, new_port=None, remove_port=None, key_only=False, verify=None,
+               _restore=None, _restore_check=None):
+        restoring = _restore is not None
         if type(current_port) is not int or not 1 <= current_port <= 65535:
             raise SSHFailure("当前 SSH 端口无效")
         if new_port is not None and (type(new_port) is not int or not 1 <= new_port <= 65535):
             raise SSHFailure("新端口必须是 1–65535 的整数")
         if remove_port is not None and (type(remove_port) is not int or not 1 <= remove_port <= 65535):
             raise SSHFailure("旧端口必须是 1–65535 的整数")
-        if sum((new_port is not None, remove_port is not None, bool(key_only))) != 1:
+        if sum((new_port is not None, remove_port is not None, bool(key_only), restoring)) != 1:
             raise SSHFailure("每次只能执行一项 SSH 变更")
         if remove_port == current_port:
             raise SSHFailure("不能关闭当前 SSH 会话使用的端口")
         with self.files.locked():
+            if restoring and _restore_check is not None:
+                _restore_check()
             if not (self.root / "run/systemd/system").is_dir():
                 raise SSHFailure("需要运行中的 systemd")
             if not self.dropins.is_dir() or self.dropins.is_symlink():
@@ -247,6 +266,8 @@ class SSHManager:
                 raise SSHFailure("当前 SSH 或 systemd 程序路径不受支持")
             external_ports = external_config(self.base, self.dropins, self.target)
             before, mode = self._read_before()
+            if restoring and before != _restore[0]:
+                raise SSHFailure("当前 SSH 配置与历史变更后的记录不一致，拒绝覆盖")
             _, was_key_only = read_managed(before)
             effective, old_ports = self.effective(sshd, user, address)
             if current_port not in old_ports:
@@ -273,8 +294,22 @@ class SSHManager:
                 managed_ports.add(new_port)
             if remove_port is not None:
                 managed_ports.discard(remove_port)
-            after = render_managed(managed_ports, was_key_only or key_only)
-            if after == before:
+            expected_key_only = was_key_only or key_only
+            target_ports = None
+            apply_mode = mode
+            if restoring:
+                after, apply_mode = _restore[1:]
+                restored_ports, expected_key_only = read_managed(after)
+                target_ports = restored_ports | external_ports
+                if not target_ports:
+                    target_ports = {22}
+                if current_port not in target_ports:
+                    raise SSHFailure("历史配置不保留当前 SSH 端口；请先从历史配置保留的端口重新登录后恢复")
+                if (target_ports - old_ports) & listen:
+                    raise SSHFailure("历史 SSH 端口已被其他服务监听，拒绝恢复")
+            else:
+                after = render_managed(managed_ports, expected_key_only)
+            if after == before and apply_mode == mode:
                 return "项目 SSH 配置已经包含所选设置；未修改。"
             service = self.service(systemctl)
             self.files._prepare_state_dir()
@@ -291,7 +326,8 @@ class SSHManager:
             state = {"schema": 1, "target": str(self.target), "service": service,
                      "before_exists": before is not None, "before_mode": mode,
                      "before_sha256": hashlib.sha256(before).hexdigest() if before is not None else None,
-                     "after_sha256": hashlib.sha256(after).hexdigest()}
+                     "after_exists": after is not None,
+                     "after_sha256": hashlib.sha256(after).hexdigest() if after is not None else None}
             self.files._atomic_create(tx_dir / "state.json", (json.dumps(state) + "\n").encode(), 0o600)
             unit = "vps-script-ssh-" + tx_dir.name
             self.run((systemd_run, "--unit=" + unit, "--on-active=180s", "/usr/bin/python3", "-I", "-B", str(worker), str(tx_dir)))
@@ -309,23 +345,27 @@ class SSHManager:
                     if active.returncode != 0 or active.stdout.strip() != "active":
                         raise SSHFailure("回滚定时器不再活动，未修改配置")
                     (tx_dir / "apply-started").write_text("1\n", encoding="ascii")
-                    self._replace(before, after, mode)
+                    self._replace(before, after, apply_mode)
                     self.run((sshd, "-t"))
                     updated, updated_ports = self.effective(sshd, user, address)
-                    expected_ports = old_ports - ({remove_port} if remove_port is not None else set())
+                    expected_ports = target_ports if restoring else old_ports - ({remove_port} if remove_port is not None else set())
+                    removed_ports = old_ports - target_ports if restoring else ({remove_port} if remove_port is not None else set())
                     if (not expected_ports.issubset(updated_ports)
                             or (new_port is not None and new_port not in updated_ports)
-                            or (remove_port is not None and remove_port in updated_ports)):
+                            or removed_ports & updated_ports
+                            or (restoring and updated_ports != target_ports)):
                         raise SSHFailure("SSH 有效端口与预期不一致")
-                    if was_key_only or key_only:
+                    if expected_key_only:
                         if any(updated.get(k) != [v] for k, v in AUTH.items()):
                             raise SSHFailure("仅公钥认证未按预期生效")
+                    if restoring and user == "root" and updated.get("permitrootlogin") not in (["yes"], ["prohibit-password"], ["without-password"]):
+                        raise SSHFailure("恢复后的配置未明确允许当前 root 公钥登录")
                     self.run((systemctl, "daemon-reload"))
                     self.run((systemctl, "restart" if service == "ssh.socket" else "reload", service))
                     actual = listening_ports(self.run((ss, "-H", "-l", "-t", "-n")).stdout)
                     if (not expected_ports.issubset(actual)
                             or (new_port is not None and new_port not in actual)
-                            or (remove_port is not None and remove_port in actual)):
+                            or removed_ports & actual):
                         raise SSHFailure("SSH 实际监听端口与预期不一致")
                 finally:
                     os.close(lock)
@@ -334,7 +374,7 @@ class SSHManager:
                 print("新连接请使用 -o ControlMaster=no -o ControlPath=none，避免复用现有连接。")
                 if new_port is not None:
                     print(f"请连接新 SSH 端口 {new_port}，不要用旧端口代替验证。")
-                if key_only:
+                if key_only or (restoring and expected_key_only):
                     print("请再次强制使用公钥登录，并确认密码或键盘交互认证被拒绝。")
                 print("验证时核对服务器主机密钥；指纹出现未解释的变化时不要确认。")
                 if verify is None or not verify():
@@ -353,6 +393,8 @@ class SSHManager:
                 if result.returncode != 0:
                     print("SSH 立即恢复失败；请立即使用服务商控制台检查。")
                 raise
+            if restoring:
+                return "历史 SSH 项目配置已恢复并收到第二会话确认；未恢复其他 SSH 配置或云防火墙。"
             detail = "项目管理的旧端口已移除。" if remove_port is not None else "旧端口仍保留。"
             return f"SSH 设置已应用并收到第二会话确认；{detail} 云防火墙需独立检查。"
 
@@ -374,13 +416,6 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
             print(f"请先确保云防火墙允许新 TCP 端口 {new_port}；成功后旧端口仍保留。")
             if open_firewall:
                 print(f"将在修改 SSH 前请求 UFW 允许 {new_port}/tcp；若 UFW 未安装会提示但不会阻止 SSH 变更。")
-                try:
-                    print(firewall.FirewallManager().allow(new_port, new_port, "tcp"))
-                except (firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
-                    print(f"UFW 放行未完成：{exc}；请手动确认后再继续。")
-                    if input("输入 CONTINUE 跳过 UFW 放行继续，其他内容取消：").strip() != "CONTINUE":
-                        print("已取消。")
-                        return 0
         if remove_port is not None:
             print(f"将关闭项目管理的 SSH 旧端口 {remove_port}；必须从其他已验证的端口运行本操作。")
         if key_only:
@@ -401,21 +436,34 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
         if input("输入 YES 应用，其他内容取消：").strip() != "YES":
             print("已取消。")
             return 0
+        if new_port is not None and open_firewall:
+            try:
+                print(backup.track("ufw", "allow-ssh-port",
+                                   lambda: firewall.FirewallManager().allow(new_port, new_port, "tcp"),
+                                   details={"action": f"allow {new_port}/tcp"}))
+            except (backup.BackupFailure, firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
+                print(f"UFW 放行未完成：{exc}；请手动确认后再继续。")
+                if input("输入 CONTINUE 跳过 UFW 放行继续，其他内容取消：").strip() != "CONTINUE":
+                    print("已取消。")
+                    return 0
         def verify():
             try:
                 return input("第二个 SSH 会话已成功登录后输入 VERIFIED：").strip() == "VERIFIED"
             except EOFError:
                 return False
-        result = SSHManager().change(user=user, address=address, current_port=current_port,
-                                     new_port=new_port, remove_port=remove_port, key_only=key_only, verify=verify)
+        action = "key-only" if key_only else "add-port" if new_port is not None else "remove-port"
+        result = backup.track("ssh", action,
+                              lambda: SSHManager().change(user=user, address=address, current_port=current_port,
+                                                          new_port=new_port, remove_port=remove_port,
+                                                          key_only=key_only, verify=verify),
+                              details={"action": f"{action}: {new_port or remove_port or 'all-users'}"})
         print(result)
         if key_only:
             print("SSH 端口和 root 登录策略保持原样；请确认 root 账号使用密钥登录，并确认密码/键盘交互被拒绝。")
         if new_port is not None or remove_port is not None:
             try:
                 from . import fail2ban
-                if Path("/etc/fail2ban/jail.d/50-vps-script-sshd.local").exists():
-                    print(fail2ban.Fail2banManager().refresh_ports())
+                fail2ban.refresh_ports()
             except Exception as exc:
                 # 端口已经变更；Fail2ban 刷新失败只提示，不影响 SSH 结果。
                 print(f"Fail2ban 端口刷新未完成：{exc}")
@@ -423,6 +471,6 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
     except EOFError:
         print("已取消。")
         return 0
-    except (SSHFailure, firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
+    except (backup.BackupFailure, SSHFailure, firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

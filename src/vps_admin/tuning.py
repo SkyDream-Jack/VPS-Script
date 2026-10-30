@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from . import bbr, checks, packages
+from . import backup, bbr, checks, packages
 
 HEADER = "# Managed by VPS-Script; do not edit while managed.\n"
 CONFIG_NAME = "91-vps-script-tuning.conf"
@@ -449,7 +449,7 @@ def change(profile="conservative", restore=False, bandwidth_mbps=None, rtt_ms=20
             if input("输入 YES 继续，其他内容取消：").strip() != "YES":
                 print("已取消。")
                 return 0
-            print(manager.restore())
+            print(backup.track("tuning", "restore", manager.restore))
             return 0
         target = target_values(profile, read_ram_kb(), bandwidth_mbps, rtt_ms, fastopen)
         print(f"档位：{PROFILE_TITLES[profile]}")
@@ -463,11 +463,11 @@ def change(profile="conservative", restore=False, bandwidth_mbps=None, rtt_ms=20
         if input("输入 YES 应用，其他内容取消：").strip() != "YES":
             print("已取消。")
             return 0
-        print(manager.apply(profile, bandwidth_mbps, rtt_ms, fastopen))
+        print(backup.track("tuning", "apply", lambda: manager.apply(profile, bandwidth_mbps, rtt_ms, fastopen)))
         return 0
     except EOFError:
         print("已取消。")
         return 0
-    except (TuningFailure, bbr.BBRFailure, OSError) as exc:
+    except (TuningFailure, bbr.BBRFailure, backup.BackupFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

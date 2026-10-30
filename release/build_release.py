@@ -18,6 +18,7 @@ FILES = (
     "src/vps_admin/firewall.py", "src/vps_admin/ufw_rollback.py", "src/vps_admin/fail2ban.py",
     "src/vps_admin/ssh.py", "src/vps_admin/ssh_rollback.py", "src/vps_admin/status.py",
     "src/vps_admin/swap.py", "src/vps_admin/common.py", "src/vps_admin/tuning.py", "src/vps_admin/bench.py", "src/vps_admin/external.py",
+    "src/vps_admin/backup.py", "src/vps_admin/backup_access.py", "src/vps_admin/backup_network.py",
 )
 EXECUTABLE = frozenset({"vps-admin", "install-local.sh", "bootstrap.py"})
 

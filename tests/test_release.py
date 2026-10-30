@@ -20,6 +20,17 @@ from release import build_release, prepare_test_version
 
 
 class ReleaseTest(unittest.TestCase):
+    def test_new_runtime_modules_are_in_download_build_and_installer_manifests(self):
+        expected = {"backup.py", "backup_access.py", "backup_network.py"}
+        installer = (PROJECT / "install-local.sh").read_text()
+        modules_line = next(line for line in installer.splitlines() if line.startswith("modules=("))
+        modules = set(shlex.split(modules_line[len("modules=("):-1]))
+        self.assertTrue(expected.issubset(modules))
+        for filename in expected:
+            path = "src/vps_admin/" + filename
+            self.assertIn(path, bootstrap.FILES)
+            self.assertIn(path, build_release.FILES)
+
     def test_builder_is_reproducible_and_matches_bootstrap_whitelist(self):
         self.assertEqual(set(build_release.FILES), bootstrap.FILES)
         with tempfile.TemporaryDirectory() as directory:
@@ -31,6 +42,15 @@ class ReleaseTest(unittest.TestCase):
             unpacked = bootstrap.unpack(first.read_bytes(), root / "unpacked")
             self.assertEqual((unpacked / "vps-admin").read_bytes(), (PROJECT / "vps-admin").read_bytes())
             self.assertTrue((unpacked / "vps-admin").stat().st_mode & 0o111)
+            # Isolated import resolves only packaged project modules, not the
+            # working checkout; -B keeps verification from altering the tree.
+            code = ("import sys; sys.path.insert(0, sys.argv[1]); "
+                    "from vps_admin import backup, backup_access, backup_network")
+            imported = subprocess.run((sys.executable, "-I", "-B", "-c", code, str(unpacked / "src")),
+                                      cwd=root, capture_output=True, text=True, timeout=15)
+            self.assertEqual(imported.returncode, 0, imported.stderr)
+            self.assertEqual(imported.stdout, "")
+            self.assertFalse(tuple(unpacked.rglob("__pycache__")))
 
     def test_invalid_version_and_existing_outputs_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
