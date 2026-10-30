@@ -129,12 +129,12 @@ class PackageActionsTest(unittest.TestCase):
         self.assertEqual(env["PATH"], packages.SAFE_PATH)
 
     def test_demo_menu_never_executes_actions(self):
-        with patch("builtins.input", side_effect=["5", "1", "0", "0"]), \
+        with patch("builtins.input", side_effect=["1", "1", "1", "0", "0", "0"]), \
              patch.object(packages, "run_action", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             result = cli.menu(demo=True, experimental=True)
         self.assertEqual(result, 0)
-        self.assertIn("不会执行任何软件操作", output.getvalue())
+        self.assertIn("不会读取本机、联网或执行修改", output.getvalue())
 
 
 if __name__ == "__main__":

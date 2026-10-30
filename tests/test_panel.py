@@ -95,11 +95,11 @@ class PanelInstallerTest(unittest.TestCase):
             self.assertFalse(Path(args[0][1]).exists())
 
     def test_demo_does_not_install(self):
-        with patch("builtins.input", side_effect=["2", "0"]), \
+        with patch("builtins.input", side_effect=["1", "0"]), \
              patch.object(panel, "install", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as out:
             cli.panel_menu(demo=True, experimental=True)
-        self.assertIn("不会下载或执行", out.getvalue())
+        self.assertIn("不会读取本机、联网或执行修改", out.getvalue())
 
 
 if __name__ == "__main__":

@@ -30,19 +30,17 @@ class CLIRegressionTest(unittest.TestCase):
         self.assertEqual(payload["schema"], 1)
 
     def test_demo_preview_never_downloads_any_external_script(self):
-        for key in cli.external.SPECS:
-            with self.subTest(key=key), \
-                 patch("builtins.input", side_effect=["10", key, "0"]), \
-                 patch.object(cli.external, "download", side_effect=AssertionError("must not download")), \
-                 contextlib.redirect_stdout(io.StringIO()) as output:
-                cli.test_menu(demo=True)
-            self.assertIn("不会下载", output.getvalue())
+        with patch("builtins.input", side_effect=["6", "0"]), \
+             patch.object(cli.external, "download", side_effect=AssertionError("must not download")), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            cli.external_menu(demo=True)
+        self.assertIn("不会读取本机、联网或执行修改", output.getvalue())
 
     def test_real_preview_remains_available(self):
-        with patch("builtins.input", side_effect=["10", "nq", "0"]), \
+        with patch("builtins.input", side_effect=["6", "nq", "0"]), \
              patch.object(cli.external, "preview") as preview, \
              contextlib.redirect_stdout(io.StringIO()):
-            cli.test_menu()
+            cli.external_menu()
         preview.assert_called_once_with("nq")
 
     def test_maintenance_uses_documented_root_command(self):

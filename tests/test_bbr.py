@@ -121,11 +121,11 @@ class BBRTest(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "keep\n")
 
     def test_demo_cannot_modify(self):
-        with patch("builtins.input", side_effect=["2", "3", "0"]), \
+        with patch("builtins.input", side_effect=["1", "2", "0"]), \
              patch.object(bbr, "change", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as out:
-            cli.network_menu(demo=True, experimental=True)
-        self.assertIn("不会修改", out.getvalue())
+            cli.bbr_menu(demo=True, experimental=True)
+        self.assertIn("不会读取本机、联网或执行修改", out.getvalue())
 
 
 if __name__ == "__main__":

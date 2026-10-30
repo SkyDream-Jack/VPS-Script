@@ -326,8 +326,8 @@ class FirewallTest(unittest.TestCase):
         with patch("builtins.input", side_effect=["2", "3", "0"]), \
              patch.object(firewall, "enable", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as out:
-            cli.security_menu(demo=True, experimental=True)
-        self.assertIn("不会修改防火墙", out.getvalue())
+            cli.ufw_menu(demo=True, experimental=True)
+        self.assertIn("不会读取本机、联网或执行修改", out.getvalue())
 
 
 if __name__ == "__main__":

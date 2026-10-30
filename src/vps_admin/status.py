@@ -34,6 +34,8 @@ ALIASES = {
     "common": ("swap", "timezone", "dns"),
 }
 STATUS_LABELS = {"ok": "正常", "warn": "注意", "unknown": "未知", "info": "信息"}
+SUMMARY_MAX_CHARS = 1800
+SUMMARY_MAX_SECTIONS = 12
 
 
 def _item(name, state, detail=""):
@@ -358,27 +360,36 @@ def _ssh():
         kbd = values.get("kbdinteractiveauthentication", [])
         pubkey = values.get("pubkeyauthentication", [])
         methods = values.get("authenticationmethods", [])
-        key_only = (password == ["no"] and kbd == ["no"] and pubkey == ["yes"]
-                    and methods in ([], ["publickey"]))
-        if key_only:
-            items.append(_item("仅公钥认证", "ok", "有效配置显示密码和键盘交互认证已关闭。"))
-        else:
-            items.append(_item("仅公钥认证", "warn", "有效配置仍允许密码或键盘交互认证。"))
-        root_login = values.get("permitrootlogin", [])
         password_off = password == ["no"] and kbd == ["no"]
-        root_key_possible = (password_off and pubkey == ["yes"]
-                             and methods in ([], ["publickey"]))
+        password_switch_on = password == ["yes"] or kbd == ["yes"]
+        key_only = password_off and pubkey == ["yes"] and methods == ["publickey"]
+        if key_only:
+            items.append(_item("仅公钥认证", "ok", "默认上下文明确要求 publickey，且密码和键盘交互认证已关闭；实际登录仍需验证。"))
+        elif password_switch_on:
+            items.append(_item("仅公钥认证", "warn", "密码或键盘交互认证开关仍开启；实际可用方式还受 AuthenticationMethods 等设置限制。"))
+        elif password_off and pubkey == ["no"]:
+            items.append(_item("仅公钥认证", "warn", "密码和键盘交互认证已关闭，但公钥认证也未启用；请检查实际认证方式。"))
+        elif password_off:
+            items.append(_item("仅公钥认证", "unknown", "密码和键盘交互认证已关闭，但仅公钥认证尚未确认；AuthenticationMethods=any 或字段缺失不能据此判定。"))
+        else:
+            items.append(_item("仅公钥认证", "unknown", "认证字段不完整或无法识别，仅公钥认证尚未确认。"))
+        root_login = values.get("permitrootlogin", [])
         if root_login:
             policy = root_login[0]
-            if policy == "yes" and root_key_possible:
+            if policy == "yes" and key_only:
                 items.append(_item("root 登录", "info",
-                                   "PermitRootLogin 为 yes，但密码/键盘交互已关闭；root 只能使用密钥。"
-                                   "若想更明确，可改为 prohibit-password。"))
-            elif policy == "yes":
+                                   "PermitRootLogin 为 yes；默认上下文明确要求公钥，且密码/键盘交互已关闭；root 实际登录仍需验证。"))
+            elif policy == "yes" and password_off:
+                items.append(_item("root 登录", "unknown",
+                                   "PermitRootLogin 为 yes；密码/键盘交互均已关闭，但 root 仅公钥认证尚未确认。"))
+            elif policy == "yes" and password_switch_on:
                 items.append(_item("root 登录", "warn",
-                                   "PermitRootLogin 为 yes 且密码认证可能仍启用；建议改为 prohibit-password 或 no。"))
+                                   "PermitRootLogin 为 yes，且密码或键盘交互开关仍开启；实际可用方式还受 AuthenticationMethods 等设置限制。"))
+            elif policy == "yes":
+                items.append(_item("root 登录", "unknown",
+                                   "PermitRootLogin 为 yes；认证字段不完整，无法确认 root 的认证方式。"))
             elif policy in ("prohibit-password", "without-password"):
-                items.append(_item("root 登录", "info", "root 仅允许密钥登录（prohibit-password）。"))
+                items.append(_item("root 登录", "info", "root 密码和键盘交互认证被禁止；是否仅公钥还需结合 AuthenticationMethods 等设置判断。"))
             elif policy == "no":
                 items.append(_item("root 登录", "info", "root 登录已禁用；如需 root 请使用普通用户 + sudo。"))
             else:
@@ -601,9 +612,20 @@ def names_for(section):
     raise KeyError(section)
 
 
-def collect(section="all"):
+def collect_selected(names, section="overview"):
+    """Collect only explicitly selected sections, for cached menu summaries.
+
+    This uses the same collectors and payload schema as public status commands.
+    Menu grouping does not change the public section names or their aliases.
+    """
+    if isinstance(names, str):
+        raise TypeError("names must contain section names, not a single string")
+    selected = tuple(dict.fromkeys(names))
+    for name in selected:
+        if name not in _COLLECTORS:
+            raise KeyError(name)
     sections = []
-    for name in names_for(section):
+    for name in selected:
         try:
             sections.append(_COLLECTORS[name]())
         except Exception as exc:  # 状态查询不应因单项异常而整体崩溃
@@ -618,6 +640,107 @@ def collect(section="all"):
         "section": section,
         "sections": sections,
     }
+
+
+def collect_overview():
+    return collect_selected(("system", "ssh", "ufw"))
+
+
+def collect(section="all"):
+    return collect_selected(names_for(section), section=section)
+
+
+def _summary_text(value, limit=48):
+    if value is None:
+        return "未知"
+    # Terminal control characters and multiline values must not alter the menu.
+    text = " ".join("".join(char if char.isprintable() else " " for char in str(value)).split())
+    if not text:
+        return "未知"
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def _summary_ports(value):
+    text = str(value or "")
+    if not re.fullmatch(r"[0-9、, ]+", text):
+        return "未知"
+    values = tuple(dict.fromkeys(part for part in re.split(r"[、, ]+", text) if part))
+    if not values or any(len(part) > 5 or not 1 <= int(part) <= 65535 for part in values):
+        return "未知"
+    return "、".join(values[:8]) + ("…" if len(values) > 8 else "")
+
+
+def _summary_service(value):
+    text = str(value or "")
+    return _summary_text(text, 40) if re.fullmatch(r"[A-Za-z-]+ / [A-Za-z-]+", text) else "未知"
+
+
+def _summary_range(value):
+    text = str(value or "")
+    if not re.fullmatch(r"[0-9]{1,5}-[0-9]{1,5}", text):
+        return "未知"
+    start, end = map(int, text.split("-"))
+    return text if 1 <= start <= end <= 65535 else "未知"
+
+
+def render_summary(payload):
+    """Render bounded, non-sensitive menu hints without running any checks.
+
+    Never include hostnames, raw item details, addresses, full firewall rules,
+    panel paths, or other unselected facts. Counts describe check items, not
+    external connectivity or a successful application of configuration.
+    """
+    lines = ["状态快照：" + _summary_text(payload.get("generated_at"), 40)]
+    sections = payload.get("sections", [])
+    for section in sections[:SUMMARY_MAX_SECTIONS]:
+        name = section.get("name")
+        facts = section.get("facts", {})
+        items = section.get("items", [])
+        warnings = sum(item.get("state") == "warn" for item in items)
+        unknowns = sum(item.get("state") not in ("ok", "warn", "info") for item in items)
+        counts = f"注意项 {warnings} / 未知项 {unknowns}"
+        if name == "system":
+            detail = (f"系统 {_summary_text(facts.get('系统'), 40)}；"
+                      f"内存 {_summary_text(facts.get('内存'), 48)}；"
+                      f"磁盘 {_summary_text(facts.get('根分区'), 40)}")
+        elif name == "ssh":
+            auth = lambda key: facts.get(key) if facts.get(key) in ("yes", "no") else "未知"
+            detail = (f"SSH 端口 {_summary_ports(facts.get('有效端口'))}；"
+                      f"密码 {auth('密码认证')} / 交互 {auth('键盘交互认证')} / 公钥 {auth('公钥认证')}")
+        elif name == "ufw":
+            state = facts.get("状态") if facts.get("状态") in ("active", "inactive") else "未知"
+            ipv6 = facts.get("IPv6") if facts.get("IPv6") in ("yes", "no") else "未知"
+            detail = f"UFW {state}；IPv6 {ipv6}"
+        elif name == "panel":
+            detail = f"3x-ui {_summary_service(facts.get('服务'))}；端口 {_summary_ports(facts.get('端口'))}"
+        elif name == "bbr":
+            detail = f"TCP 拥塞控制 {_summary_text(facts.get('TCP 拥塞控制'), 20)}；默认队列 {_summary_text(facts.get('默认队列'), 20)}"
+        elif name == "tuning":
+            detail = f"调优 {_summary_text(facts.get('档位'), 32)}；配置 {_summary_text(facts.get('配置内容'), 16)}"
+        elif name == "fail2ban":
+            detail = f"Fail2ban {_summary_service(facts.get('服务'))}"
+        elif name == "hy2":
+            detail = (f"Hy2 转发 {_summary_service(facts.get('服务'))}；"
+                      f"范围 {_summary_range(facts.get('跳跃范围'))} → {_summary_ports(facts.get('目标端口'))}")
+        elif name == "swap":
+            detail = f"Swap {_summary_text(facts.get('项目 swap'), 12)}；大小 {_summary_text(facts.get('大小'), 20)}"
+        elif name == "timezone":
+            detail = f"时区 {_summary_text(facts.get('有效时区'), 40)}"
+        elif name == "packages":
+            detail = f"软件 {_summary_text(facts.get('包管理器'), 16)}；需要重启 {_summary_text(facts.get('需要重启'), 12)}"
+        elif name == "dns":
+            servers = facts.get("名称服务器")
+            count = "未知" if not servers or servers == "未知" else (0 if servers == "未配置" else len(str(servers).split("、")))
+            detail = f"DNS 名称服务器数量 {count}"
+        else:
+            detail = SECTIONS.get(name, "其他检查")
+        lines.append(f"{detail} ｜ {counts}")
+    if len(sections) > SUMMARY_MAX_SECTIONS:
+        lines.append("…其余检查请查看完整状态。")
+    text = "\n".join(lines)
+    if len(text) > SUMMARY_MAX_CHARS:
+        text = text[:SUMMARY_MAX_CHARS - 15] + "\n…请查看完整状态。"
+    return text
 
 
 def render(payload):

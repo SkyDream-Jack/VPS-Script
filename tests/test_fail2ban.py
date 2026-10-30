@@ -113,11 +113,11 @@ class Fail2banTest(unittest.TestCase):
             self.manager.unban("not-an-ip")
 
     def test_demo_never_changes_fail2ban(self):
-        with patch("builtins.input", side_effect=["4", "0"]), \
+        with patch("builtins.input", side_effect=["1", "0"]), \
              patch.object(fail2ban, "configure", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as out:
-            cli.security_menu(demo=True, experimental=True)
-        self.assertIn("不会修改 Fail2ban", out.getvalue())
+            cli.fail2ban_menu(demo=True, experimental=True)
+        self.assertIn("不会读取本机、联网或执行修改", out.getvalue())
 
 
 if __name__ == "__main__":

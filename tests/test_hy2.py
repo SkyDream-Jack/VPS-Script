@@ -146,11 +146,11 @@ class Hy2Test(unittest.TestCase):
         self.assertIn("table ip6", config)
 
     def test_demo_never_changes_rules(self):
-        with patch("builtins.input", side_effect=["4", "5", "0"]), \
+        with patch("builtins.input", side_effect=["1", "2", "0"]), \
              patch.object(hy2, "change", side_effect=AssertionError("must not run")), \
              contextlib.redirect_stdout(io.StringIO()) as out:
-            cli.network_menu(demo=True, experimental=True)
-        self.assertIn("不会创建或删除", out.getvalue())
+            cli.hy2_menu(demo=True, experimental=True)
+        self.assertIn("不会读取本机、联网或执行修改", out.getvalue())
 
 
 if __name__ == "__main__":
