@@ -147,80 +147,219 @@ if [[ "$answer" != YES ]]; then
   exit 1
 fi
 
-stage=$(mktemp -d /opt/.vps-script.XXXXXXXX)
-launcher_tmp=''
-backup=''
-cleanup() {
-  [[ -z "$stage" || ! -d "$stage" ]] || rm -rf -- "$stage"
-  [[ -z "$launcher_tmp" || ! -e "$launcher_tmp" ]] || rm -f -- "$launcher_tmp"
-}
-trap cleanup EXIT
-mkdir -p "$stage/src/vps_admin" "$stage/docs"
-/usr/bin/install -m 0755 "$source_dir/vps-admin" "$stage/vps-admin"
-/usr/bin/install -m 0644 "$source_dir/README.md" "$stage/README.md"
-for file in "${modules[@]}"; do
-  /usr/bin/install -m 0644 "$source_dir/src/vps_admin/$file" "$stage/src/vps_admin/$file"
-done
-for file in "${documents[@]}"; do
-  /usr/bin/install -m 0644 "$source_dir/docs/$file" "$stage/docs/$file"
-done
-chmod 0755 "$stage" "$stage/src" "$stage/src/vps_admin" "$stage/docs"
+# The transaction is stdlib Python so every failure path shares one rollback.
+# Paths are fixed above; there is no environment override for installation targets.
+"$python_bin" -I -B - "$source_dir" "$destination" "$launcher" "$upgrade" \
+  vps-admin README.md "${modules[@]/#/src/vps_admin/}" "${documents[@]/#/docs/}" <<'INSTALL_TRANSACTION_PY'
+import ctypes
+import fcntl
+import os
+from pathlib import Path
+import shutil
+import signal
+import stat
+import sys
+import tempfile
 
-if (( upgrade )); then
-  backup=/opt/.vps-script.previous.$$
-  if [[ -e "$backup" || -L "$backup" ]]; then
-    printf '升级备份路径已存在，已停止：%s\n' "$backup" >&2
-    exit 1
-  fi
-  if ! mv -T -- "$destination" "$backup"; then
-    printf '%s\n' '无法暂存旧程序目录，升级未开始。' >&2
-    exit 1
-  fi
-fi
 
-restore_upgrade() {
-  if (( upgrade )) && [[ -n "$backup" && -d "$backup" ]]; then
-    if ! mv -T -- "$backup" "$destination"; then
-      printf '升级失败，且旧目录未能自动恢复；保留在 %s，请人工检查。\n' "$backup" >&2
-    else
-      backup=''
-    fi
-  fi
-}
+class InstallFailure(Exception):
+    pass
 
-if ! mv -T -n -- "$stage" "$destination"; then
-  restore_upgrade
-  printf '%s\n' '无法写入安装目录，升级/安装未完成。' >&2
-  exit 1
-fi
-if [[ -d "$stage" ]]; then
-  restore_upgrade
-  printf '%s\n' '目标目录在安装期间出现；已停止且未覆盖。' >&2
-  exit 1
-fi
-stage=''
 
-launcher_tmp=$(mktemp /usr/local/bin/.vps-script.XXXXXXXX)
-printf '%s\n' '#!/bin/bash' 'exec /opt/vps-script/vps-admin "$@"' > "$launcher_tmp"
-chmod 0755 "$launcher_tmp"
-if (( upgrade )); then
-  if ! mv -T -f -- "$launcher_tmp" "$launcher"; then
-    restore_upgrade
-    printf '启动命令更新失败；程序目录已恢复，请检查 %s。\n' "$launcher" >&2
-    exit 1
-  fi
-  launcher_tmp=''
-else
-  if ! ln -- "$launcher_tmp" "$launcher"; then
-    restore_upgrade
-    printf '启动命令创建失败；源码保留在 %s，请检查后手动处理。\n' "$destination" >&2
-    exit 1
-  fi
-fi
-if (( upgrade )); then
-  rm -rf -- "$backup"
-  backup=''
-  printf '%s\n' '试验升级完成。运行 vps-script 打开菜单；系统配置未被替换。'
-else
-  printf '%s\n' '本地试验安装完成。运行 vps-script 打开菜单；真实 Linux/VPS 验证尚未完成。'
-fi
+def identity(path):
+    try:
+        value = path.lstat()
+    except FileNotFoundError:
+        return None
+    return value.st_dev, value.st_ino
+
+
+def trusted_target(path, directory=False):
+    value = path.lstat()
+    valid_type = stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode)
+    if not valid_type or value.st_uid != os.geteuid() or value.st_mode & 0o022:
+        raise InstallFailure(f"目标类型、所有者或写入权限已变化，拒绝覆盖：{path}")
+    return value.st_dev, value.st_ino
+
+
+def move_absent(source, target):
+    # Never replace an unexpected path, even an empty directory created after a
+    # precheck. Linux uses renameat2(RENAME_NOREPLACE); macOS supports rootless
+    # fixture tests through renamex_np(RENAME_EXCL). Other platforms fail closed.
+    library = ctypes.CDLL(None, use_errno=True)
+    if sys.platform.startswith("linux") and hasattr(library, "renameat2"):
+        rename = library.renameat2
+        rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+        result = rename(-100, os.fsencode(source), -100, os.fsencode(target), 1)
+    elif sys.platform == "darwin" and hasattr(library, "renamex_np"):
+        rename = library.renamex_np
+        rename.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+        result = rename(os.fsencode(source), os.fsencode(target), 4)
+    else:
+        raise InstallFailure("系统缺少禁止覆盖的原子重命名操作，已停止。")
+    if result != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), str(target))
+
+
+def install_transaction(source, destination, launcher, upgrade, files):
+    source, destination, launcher = Path(source), Path(destination), Path(launcher)
+    lock_path = destination.parent / ".vps-script.install.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "r+b") as lock:
+        info = os.fstat(lock.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_mode & 0o022
+                or identity(lock_path) != (info.st_dev, info.st_ino)):
+            raise InstallFailure("安装锁文件不可信，已停止。")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise InstallFailure("另一个安装/升级正在运行，已停止。") from exc
+        # Do not unlink the flock file: another process may already hold its fd.
+        return perform_install(source, destination, launcher, bool(upgrade), files)
+
+
+def perform_install(source, destination, launcher, upgrade, files):
+    old_id = trusted_target(destination, directory=True) if upgrade else None
+    if not upgrade and identity(destination) is not None:
+        raise InstallFailure("安装目录在确认期间出现，拒绝覆盖。")
+    old_launcher_id = trusted_target(launcher) if identity(launcher) is not None else None
+    if not upgrade and old_launcher_id is not None:
+        raise InstallFailure("启动命令在确认期间出现，拒绝覆盖。")
+    workspace = Path(tempfile.mkdtemp(prefix=".vps-script-transaction.", dir=destination.parent))
+    workspace_id = identity(workspace)
+    stage, previous, failed = workspace / "new", workspace / "previous", workspace / "failed"
+    launcher_tmp = launcher_backup = None
+    launcher_tmp_id = launcher_backup_id = new_id = None
+    committed = False
+    # Never delete recovery material until commit or rollback is confirmed.
+    cleanup_allowed = False
+    try:
+        stage.mkdir()
+        for name in files:
+            relative = Path(name)
+            if relative.is_absolute() or ".." in relative.parts:
+                raise InstallFailure("安装文件清单包含无效路径。")
+            original, target = source / relative, stage / relative
+            if original.is_symlink() or not original.is_file():
+                raise InstallFailure(f"源码文件已变化：{name}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with original.open("rb") as reader, target.open("xb") as writer:
+                shutil.copyfileobj(reader, writer)
+            target.chmod(0o755 if name == "vps-admin" else 0o644)
+        for directory, _, _ in os.walk(stage):
+            Path(directory).chmod(0o755)
+        new_id = identity(stage)
+        # Prepare both launcher files before touching the installed program.
+        descriptor, name = tempfile.mkstemp(prefix=".vps-script-new.", dir=launcher.parent)
+        launcher_tmp = Path(name)
+        launcher_tmp_id = identity(launcher_tmp)
+        with os.fdopen(descriptor, "wb") as writer:
+            writer.write(b'#!/bin/bash\nexec /opt/vps-script/vps-admin "$@"\n')
+            writer.flush()
+            os.fsync(writer.fileno())
+            os.fchmod(writer.fileno(), 0o755)
+        if old_launcher_id is not None:
+            descriptor, name = tempfile.mkstemp(prefix=".vps-script-previous.", dir=launcher.parent)
+            launcher_backup = Path(name)
+            launcher_backup_id = identity(launcher_backup)
+            with os.fdopen(descriptor, "wb") as writer, launcher.open("rb") as reader:
+                info = os.fstat(reader.fileno())
+                if (info.st_dev, info.st_ino) != old_launcher_id:
+                    raise InstallFailure("启动命令在安装期间变化，已停止。")
+                shutil.copyfileobj(reader, writer)
+                writer.flush()
+                os.fsync(writer.fileno())
+                os.fchown(writer.fileno(), info.st_uid, info.st_gid)
+                os.fchmod(writer.fileno(), stat.S_IMODE(info.st_mode))
+        if identity(destination) != old_id or identity(launcher) != old_launcher_id:
+            raise InstallFailure("安装目标在准备期间变化，未覆盖。")
+        if upgrade:
+            move_absent(destination, previous)
+        move_absent(stage, destination)
+        if identity(launcher) != old_launcher_id:
+            raise InstallFailure("启动命令在切换程序目录后变化，未覆盖。")
+        if old_launcher_id is None:
+            os.link(launcher_tmp, launcher)  # Atomic no-clobber creation.
+        else:
+            os.replace(launcher_tmp, launcher)
+        if identity(destination) != new_id or identity(launcher) != launcher_tmp_id:
+            raise InstallFailure("安装目标在提交前变化，已停止。")
+        committed = True
+    except BaseException as exc:
+        # Keep recovery indivisible with respect to ordinary termination signals.
+        # Unexpected Python exceptions also preserve backups because cleanup is
+        # still disabled until all restoration checks have completed.
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        try:
+            errors = []
+            try:
+                current_launcher = identity(launcher)
+                if current_launcher == launcher_tmp_id and launcher_tmp_id is not None:
+                    if old_launcher_id is None:
+                        launcher.unlink()
+                    else:
+                        if identity(launcher_backup) != launcher_backup_id:
+                            raise InstallFailure("启动命令备份已变化")
+                        os.replace(launcher_backup, launcher)
+                elif current_launcher != old_launcher_id:
+                    raise InstallFailure("启动命令被外部修改，保留原样")
+            except (OSError, InstallFailure) as error:
+                errors.append(str(error))
+            try:
+                if new_id is not None and identity(destination) == new_id:
+                    move_absent(destination, failed)
+                if old_id is not None and identity(previous) == old_id:
+                    move_absent(previous, destination)
+                elif identity(destination) != old_id:
+                    raise InstallFailure("程序目录被外部修改，保留原样")
+            except (OSError, InstallFailure) as error:
+                errors.append(str(error))
+            if errors:
+                recovery = f"；启动命令备份：{launcher_backup}" if launcher_backup else ""
+                raise InstallFailure(f"安装/升级失败：{exc}；自动恢复未完成：{'；'.join(errors)}。"
+                                     f"保留事务目录：{workspace}{recovery}") from exc
+            cleanup_allowed = True
+            raise InstallFailure(f"安装/升级失败：{exc}；程序目录和启动命令已恢复到操作前状态。") from exc
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+    else:
+        cleanup_allowed = True
+    finally:
+        if cleanup_allowed:
+            for path, expected in ((launcher_tmp, launcher_tmp_id), (launcher_backup, launcher_backup_id)):
+                if path is not None and identity(path) == expected:
+                    try:
+                        path.unlink()
+                    except OSError as error:
+                        print(f"临时文件未能删除，保留供检查：{path}（{error}）", file=sys.stderr)
+            if identity(workspace) == workspace_id:
+                try:
+                    shutil.rmtree(workspace)
+                except OSError as error:
+                    print(f"事务目录未能删除，保留供检查：{workspace}（{error}）", file=sys.stderr)
+        else:
+            print(f"尚未确认提交或完整恢复，保留事务目录：{workspace}；"
+                  f"启动命令备份：{launcher_backup or '未创建'}。请人工检查。", file=sys.stderr)
+    if committed:
+        print("试验升级完成。" if upgrade else "本地试验安装完成。")
+        print("运行 vps-script 打开菜单；系统配置未被替换。真实 Linux/VPS 全功能验证尚未完成。")
+
+
+def interrupted(signum, frame):
+    # Further termination signals must not interrupt the recovery attempt.
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, signal.SIG_IGN)
+    raise InterruptedError(f"收到信号 {signum}")
+
+
+if __name__ == "__main__":
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(number, interrupted)
+    try:
+        install_transaction(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5:])
+    except (InstallFailure, OSError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1)
+INSTALL_TRANSACTION_PY

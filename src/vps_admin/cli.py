@@ -24,8 +24,9 @@ Swap：示例未检查；时区示例为 Asia/Shanghai
 演示模式不会安装软件或修改系统。"""
 
 UPDATE_COMMAND = (
-    'sudo bash -c "$(curl -fsSL '
-    'https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh)"'
+    'f=$(mktemp) && curl -fsSL '
+    'https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh '
+    '-o "$f" && bash "$f" && rm -f "$f"'
 )
 
 
@@ -430,6 +431,8 @@ def test_menu(demo: bool = False, experimental: bool = False) -> None:
             if key:
                 if key not in external.SPECS:
                     print("未知名称。")
+                elif demo:
+                    print(f"【演示】{external.SPECS[key].title}；不会下载或执行外部脚本。")
                 else:
                     try:
                         external.preview(key)
@@ -479,7 +482,7 @@ def maintenance_menu() -> None:
             print(f"程序目录：{Path('/opt/vps-script') if Path('/opt/vps-script').is_dir() else '未安装或不在默认路径'}")
             print(f"启动命令：{Path('/usr/local/bin/vps-script') if Path('/usr/local/bin/vps-script').exists() else '未安装'}")
         elif choice == "2":
-            print("在 VPS 上重新运行以下命令即可升级（会保留 /etc、/var 中的系统配置）：")
+            print("在 VPS 的 root SSH 终端重新运行以下命令即可升级（会保留 /etc、/var 中的系统配置）：")
             print(UPDATE_COMMAND)
             print("升级前请先运行 vps-script status，并保留一个 SSH 会话。")
         elif choice == "3":
@@ -572,10 +575,17 @@ def main(argv=None) -> int:
             return 130
     if args.action == "doctor":
         if args.demo:
-            print(DEMO)
+            if args.json:
+                print(status.dumps({"schema": 1, "demo": True, "section": "all", "sections": [
+                    {"name": "all", "title": "演示", "facts": {},
+                     "items": [{"name": "演示", "state": "info", "detail": DEMO}]},
+                ]}))
+            else:
+                print(DEMO)
             return 0
         payload = status.collect("all")
-        print("VPS-Script 诊断：以下检查均为只读；未知项不会冒充正常。")
+        if not args.json:
+            print("VPS-Script 诊断：以下检查均为只读；未知项不会冒充正常。")
         print(status.dumps(payload) if args.json else status.render(payload))
         return 0
     if args.demo:

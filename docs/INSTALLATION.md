@@ -1,18 +1,18 @@
 # 安装、升级与卸载
 
-当前为 v0.5.1-dev 开发版本，尚未通过真实 VPS 端到端验证，不应在重要服务器使用。安装后默认菜单只读；使用 `--experimental` 或菜单内“启用修改模式”后才可以选择试验性的系统修改，且每项仍需单独确认。
+当前为 v0.5.2-dev 开发版本，尚未通过真实 VPS 端到端验证，不应在重要服务器使用。一键安装后自动进入试验菜单；直接运行 `vps-script` 时默认只读。使用 `--experimental` 或菜单内“启用修改模式”后才可以选择试验性的系统修改，且每项仍需单独确认。
 
 ## 一键安装 / 升级
 
 在测试 VPS 的 root SSH 终端运行：
 
 ```bash
-f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh -o "$f" && sudo bash "$f" && rm -f "$f"
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh -o "$f" && bash "$f" && rm -f "$f"
 ```
 
-脚本只从 `raw.githubusercontent.com` 下载短入口、`bootstrap.py` 和固定版本测试包，并依次校验 SHA-256。需要 `curl` 或 `wget`、系统 Python 3，以及能访问 GitHub。安装到 `/opt/vps-script`，创建 `/usr/local/bin/vps-script`。
+脚本只从 `raw.githubusercontent.com` 下载短入口、`bootstrap.py` 和固定版本测试包，并依次校验 SHA-256。短命令需要 `curl`、系统 Python 3，以及能访问 GitHub；在 root SSH 中直接运行，不依赖 `sudo`，并保留 SSH 会话上下文。安装到 `/opt/vps-script`，创建 `/usr/local/bin/vps-script`。
 
-重复运行同一命令会升级：先暂存旧程序目录，再替换为新目录，保留 `/etc`、`/var` 中的 SSH、防火墙、BBR、Hy2 和 3x-ui 配置。升级失败时会尽量恢复旧目录；如果恢复失败，会保留 `/opt/.vps-script.previous.<pid>` 供人工检查。
+重复运行同一命令会升级：先暂存旧程序目录，再替换为新目录，保留 `/etc`、`/var` 中的 SSH、防火墙、BBR、Hy2 和 3x-ui 配置。安装/升级使用互斥锁，提前准备启动命令；失败时恢复旧目录和启动命令，并验证结果。如果恢复失败，会保留 `/opt/.vps-script-transaction.*/` 及必要的启动命令备份，并打印具体路径供人工检查。
 
 短入口本身没有在命令中固定 SHA-256；它校验随后下载的 `bootstrap.py` 和测试包。需要先审查或固定入口摘要时，使用 [最新测试说明](https://github.com/SkyDream-Jack/VPS-Script/blob/main/test-releases/latest/INSTALL.md) 中的完整摘要。命令和摘要来自同一仓库时，校验只能检测与命令中固定值不一致的内容，不能单独证明仓库未被入侵。
 

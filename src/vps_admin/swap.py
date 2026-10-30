@@ -45,10 +45,17 @@ def validate_size(size_mb):
 
 
 def _fstab_managed_lines(text):
+    # Only an entire, unchanged project entry is ours. A matching marker at
+    # the end of another mount's line must never make that mount removable.
     return tuple(
         line for line in text.splitlines()
-        if line.strip().endswith(MARKER) and SWAP_PATH in line.split()
+        if line == FSTAB_LINE.rstrip("\n")
     )
+
+
+def _without_managed_fstab_lines(text):
+    return "".join(line for line in text.splitlines(keepends=True)
+                   if line.rstrip("\r\n") != FSTAB_LINE.rstrip("\n"))
 
 
 class SwapManager:
@@ -100,15 +107,19 @@ class SwapManager:
         except (OSError, UnicodeError) as exc:
             raise SwapFailure(f"无法读取 {self.fstab}：{exc}") from exc
 
-    def _write_fstab(self, text):
+    def _write_fstab(self, text, *, expected):
         temporary = None
         try:
+            if not self.fstab.is_file() or self.fstab.is_symlink():
+                raise SwapFailure("/etc/fstab 不是可用的普通文件")
             fd, temporary = self._mkstemp(self.fstab.parent)
             with os.fdopen(fd, "w", encoding="utf-8") as file:
                 os.fchmod(file.fileno(), 0o644)
                 file.write(text)
                 file.flush()
                 os.fsync(file.fileno())
+            if self.fstab.is_symlink() or self._fstab_text() != expected:
+                raise SwapFailure("fstab 在操作期间发生变化，拒绝覆盖")
             os.replace(temporary, self.fstab)
             temporary = None
         except OSError as exc:
@@ -166,6 +177,8 @@ class SwapManager:
                 raise SwapFailure("fstab 中已有项目 swap 条目，拒绝重复添加")
             if not self.fstab.is_file() or self.fstab.is_symlink():
                 raise SwapFailure("/etc/fstab 不是可用的普通文件")
+            if SWAP_PATH in self._fstab_text():
+                raise SwapFailure("fstab 已引用项目 swap 路径，请先检查现有条目")
             try:
                 free = shutil.disk_usage(self.swap.parent).free
             except OSError as exc:
@@ -181,12 +194,10 @@ class SwapManager:
                 self._require(("mkswap", str(self.swap)))
                 self._require(("swapon", str(self.swap)))
                 fstab_text = self._fstab_text()
-                if fstab_text and not fstab_text.endswith("\n"):
-                    fstab_text += "\n"
-                with self.fstab.open("a", encoding="utf-8") as file:
-                    file.write(FSTAB_LINE)
-                    file.flush()
-                    os.fsync(file.fileno())
+                if SWAP_PATH in fstab_text:
+                    raise SwapFailure("fstab 在操作期间出现项目 swap 引用，拒绝添加")
+                separator = "\n" if fstab_text and not fstab_text.endswith("\n") else ""
+                self._write_fstab(fstab_text + separator + FSTAB_LINE, expected=fstab_text)
                 added_fstab = True
                 if not self.status()["active"]:
                     raise SwapFailure("swapon 返回成功，但 /proc/swaps 未显示项目 swap")
@@ -214,10 +225,7 @@ class SwapManager:
         if added_fstab:
             try:
                 text = self._fstab_text()
-                self._write_fstab("\n".join(
-                    line for line in text.splitlines()
-                    if not (line.strip().endswith(MARKER) and SWAP_PATH in line.split())
-                ) + ("\n" if text.endswith("\n") else ""))
+                self._write_fstab(_without_managed_fstab_lines(text), expected=text)
             except SwapFailure:
                 pass
         try:
@@ -238,13 +246,7 @@ class SwapManager:
             text = self._fstab_text()
             if not _fstab_managed_lines(text):
                 raise SwapFailure("fstab 条目在操作期间发生变化，拒绝删除")
-            new_text = "\n".join(
-                line for line in text.splitlines()
-                if not (line.strip().endswith(MARKER) and SWAP_PATH in line.split())
-            )
-            if text.endswith("\n"):
-                new_text += "\n"
-            self._write_fstab(new_text)
+            self._write_fstab(_without_managed_fstab_lines(text), expected=text)
             if os.path.lexists(self.swap):
                 if self.swap.is_symlink() or not self.swap.is_file():
                     raise SwapFailure("项目 swap 路径不是普通文件，拒绝删除")

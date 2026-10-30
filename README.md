@@ -2,14 +2,14 @@
 
 面向 Ubuntu / Debian 新 VPS 的初始化与日常管理面板。在 SSH 终端里按需选择功能，执行前显示影响，执行后给出只读状态；默认只读，修改需要显式启用。
 
-当前版本：**v0.5.1-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
+当前版本：**v0.5.2-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
 
 ## 一键安装 / 升级
 
 在测试 VPS 的 root SSH 终端运行：
 
 ```bash
-f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh -o "$f" && sudo bash "$f" && rm -f "$f"
+f=$(mktemp) && curl -fsSL https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/latest/install.sh -o "$f" && bash "$f" && rm -f "$f"
 ```
 
 脚本会下载并校验固定版本的入口和测试包，然后要求输入 `YES` 确认。安装到 `/opt/vps-script`，启动命令为 `/usr/local/bin/vps-script`；重复运行同一命令会升级程序目录，保留 `/etc`、`/var` 中的 SSH、防火墙、BBR、Hy2 和 3x-ui 配置。
@@ -68,7 +68,7 @@ vps-script doctor
 
 - 修改功能要求 Linux、Ubuntu/Debian、root、交互式终端，并且逐项确认；默认菜单只读。
 - SSH 和 UFW 的 180 秒超时恢复使用 systemd 瞬态定时器，不保证跨重启；启用前请准备服务商控制台。
-- UFW 首次启用会检查默认入站策略必须为 `deny`；已有 nftables/iptables 规则、Docker、firewalld 或 nftables.service 时可能保守停止。Fail2ban 与 UFW 的先后顺序需要按提示操作。
+- UFW 首次启用会检查默认入站策略必须为 `deny`；删除活动 TCP 规则时会保护当前 SSH 端口，无法识别会话时停止。已有 nftables/iptables 规则、Docker、firewalld 或 nftables.service 时可能保守停止。Fail2ban 与 UFW 的先后顺序需要按提示操作。
 - 关闭密码登录会影响**所有账户**；面板只验证当前执行账户的公钥，其他账户是否有可用公钥需要自行确认。保留 root + 22 时，root 仅能密钥登录，但 22 仍会被持续扫描；请使用强密钥并保留控制台。
 - Hy2 只管理项目专属 NAT 表，不修改云防火墙；必须在云厂商控制台放行 UDP 跳跃范围和目标端口，并从外部网络实测客户端。
 - 3x-ui 安装脚本以 root 运行且会访问 GitHub/APT/公网 IP 查询服务；项目固定了版本和入口摘要，但上游包和可选证书步骤仍有各自信任边界。

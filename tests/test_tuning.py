@@ -103,6 +103,87 @@ class TuningTest(unittest.TestCase):
         self.assertFalse(self.manager.state.exists())
         self.assertEqual(self.fake.values, BASE_VALUES)
 
+    def test_changing_profile_or_options_requires_restore(self):
+        self.manager.apply("conservative")
+        before = dict(self.fake.values)
+        for args, kwargs in ((('proxy',), {}), (('conservative',), {'fastopen': True}),
+                             (('conservative',), {'rtt_ms': 250})):
+            with self.subTest(args=args, kwargs=kwargs):
+                with self.assertRaisesRegex(tuning.TuningFailure, "先恢复"):
+                    self.manager.apply(*args, **kwargs)
+                self.assertEqual(self.fake.values, before)
+        self.manager.restore()
+        self.manager.apply("proxy", fastopen=True)
+        self.assertEqual(self.fake.values["net.ipv4.tcp_fastopen"], "3")
+        self.assertEqual(self.fake.values["net.core.somaxconn"], "8192")
+
+    def test_changing_buffer_estimate_requires_restore(self):
+        self.manager.apply("buffer", bandwidth_mbps=500, rtt_ms=200)
+        for kwargs in ({'bandwidth_mbps': 1000, 'rtt_ms': 200},
+                       {'bandwidth_mbps': 500, 'rtt_ms': 100}):
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(tuning.TuningFailure, "先恢复"):
+                    self.manager.apply("buffer", **kwargs)
+
+    def test_partial_apply_and_failed_rollback_can_be_restored_later(self):
+        def fail_apply_and_rollback(args, **kwargs):
+            if args[1] == "-w" and args[2] in (
+                    "net.ipv4.tcp_fin_timeout=15", "net.core.somaxconn=128"):
+                return subprocess.CompletedProcess(args, 1, "", "simulated failure")
+            return self.fake(args, **kwargs)
+        self.manager.runner = fail_apply_and_rollback
+        with self.assertRaisesRegex(tuning.TuningFailure, "调优未完成"):
+            self.manager.apply("conservative")
+        self.assertTrue(self.manager.state.exists())
+        self.assertFalse(self.manager.config.exists())
+        self.assertEqual(self.fake.values["net.core.somaxconn"], "4096")
+        self.manager.runner = self.fake
+        self.manager.restore()
+        self.assertFalse(self.manager.state.exists())
+        self.assertEqual(self.fake.values, BASE_VALUES)
+
+    def test_restore_missing_config_still_rejects_external_live_changes(self):
+        self.manager.apply("conservative")
+        self.manager.config.unlink()
+        self.fake.values["net.core.somaxconn"] = "65535"
+        with self.assertRaisesRegex(tuning.TuningFailure, "其他操作"):
+            self.manager.restore()
+        self.assertTrue(self.manager.state.exists())
+        self.assertEqual(self.fake.values["net.core.somaxconn"], "65535")
+
+    def test_rollback_does_not_overwrite_external_live_change(self):
+        before = {"net.core.somaxconn": "128"}
+        target = {"net.core.somaxconn": "4096"}
+        self.fake.values["net.core.somaxconn"] = "65535"
+        errors = self.manager._rollback(before, target)
+        self.assertTrue(errors)
+        self.assertEqual(self.fake.values["net.core.somaxconn"], "65535")
+
+    def test_rollback_timeout_retains_snapshot_for_retry(self):
+        def fail_with_timeout(args, **kwargs):
+            if args[1] == "-w" and args[2] in (
+                    "net.ipv4.tcp_fin_timeout=15", "net.core.somaxconn=128"):
+                raise subprocess.TimeoutExpired(args, 10)
+            return self.fake(args, **kwargs)
+        self.manager.runner = fail_with_timeout
+        with self.assertRaisesRegex(tuning.TuningFailure, "调优未完成"):
+            self.manager.apply("conservative")
+        self.assertTrue(self.manager.state.exists())
+        self.manager.runner = self.fake
+        self.manager.restore()
+        self.assertEqual(self.fake.values, BASE_VALUES)
+
+    def test_failed_restore_can_be_retried_with_remaining_snapshot(self):
+        self.manager.apply("conservative")
+        self.manager.config.unlink()
+        self.fake.fail_once = "net.core.somaxconn"
+        with self.assertRaisesRegex(tuning.TuningFailure, "恢复未完全"):
+            self.manager.restore()
+        self.assertTrue(self.manager.state.exists())
+        self.manager.restore()
+        self.assertFalse(self.manager.state.exists())
+        self.assertEqual(self.fake.values, BASE_VALUES)
+
     def test_conflict_prevents_changes(self):
         (self.root / "etc/sysctl.d/99-other.conf").write_text(
             "net.core.somaxconn = 1024\n", encoding="utf-8")

@@ -308,6 +308,11 @@ class TuningManager:
         with self.files.locked():
             if os.path.lexists(self.state):
                 state = self.load_state()
+                requested = (profile, bandwidth_mbps, rtt_ms, bool(fastopen))
+                recorded = (state["profile"], state.get("bandwidth_mbps"),
+                            state.get("rtt_ms", 200), state["fastopen"])
+                if requested != recorded:
+                    raise TuningFailure("本次档位或参数与已有调优不同，请先恢复原值，再应用新的调优")
                 expected = self._render(state["profile"], state["target"])
                 if (os.path.lexists(self.config)
                         and self.files._read_regular(self.config) == expected
@@ -385,11 +390,14 @@ class TuningManager:
         errors = []
         for key in reversed(tuple(target)):
             try:
-                if self._sysctl(key) != before[key]:
+                current = self._sysctl(key)
+                if current not in (before[key], target[key]):
+                    raise TuningFailure(f"{key} 已被其他操作改为 {current}，拒绝覆盖")
+                if current != before[key]:
                     self._write(key, before[key])
                 if self._sysctl(key) != before[key]:
                     errors.append(f"{key} 未恢复")
-            except TuningFailure as exc:
+            except (TuningFailure, OSError, subprocess.TimeoutExpired) as exc:
                 errors.append(str(exc))
         return errors
 
@@ -398,10 +406,11 @@ class TuningManager:
             if not os.path.lexists(self.state):
                 raise TuningFailure("没有找到本项目记录的调优原值")
             state = self.load_state()
-            if not os.path.lexists(self.config):
-                raise TuningFailure("项目调优配置文件缺失，拒绝猜测恢复")
             expected = self._render(state["profile"], state["target"])
-            if self.files._read_regular(self.config) != expected:
+            # State is persisted before live writes, while config is created
+            # only afterwards. Interrupted applications may legitimately have
+            # no config; a valid snapshot and unchanged live values suffice.
+            if os.path.lexists(self.config) and self.files._read_regular(self.config) != expected:
                 raise TuningFailure("项目调优配置被外部修改，拒绝覆盖或恢复")
             live = self.read_live(state["target"])
             for key, value in live.items():
@@ -412,7 +421,10 @@ class TuningManager:
                 raise TuningFailure("恢复未完全生效：" + "；".join(errors))
             if self.read_live(state["target"]) != state["before"]:
                 raise TuningFailure("恢复后的运行时值与原值不一致；状态文件保留")
-            os.unlink(self.config)
+            if os.path.lexists(self.config):
+                if self.files._read_regular(self.config) != expected:
+                    raise TuningFailure("项目调优配置在恢复期间发生变化，拒绝删除")
+                os.unlink(self.config)
             os.unlink(self.state)
             return "已恢复运行时值并移除项目调优配置；其他 sysctl 文件未被改写。"
 

@@ -229,6 +229,50 @@ def _parse_effective(text):
     return values
 
 
+def _ssh_ufw_item(text, ports):
+    """Summarize explicit rules, without equating a port match to access.
+
+    UFW's display omits some rule details, so source/destination constraints,
+    ranges and possible earlier blocking rules require separate inspection.
+    Only simple ALLOW IN rules for both families receive an OK summary.
+    """
+    allowed = {port: set() for port in ports}
+    ambiguous = False
+    blocked = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        rule = re.fullmatch(r"(.+?)\s+(ALLOW|DENY|REJECT|LIMIT)\s+(IN|OUT|FWD)\s+(.+)", line)
+        if not rule:
+            if re.search(r"\b(?:ALLOW|DENY|REJECT|LIMIT)\b", line):
+                ambiguous = True
+            continue
+        destination, action, direction, source = rule.groups()
+        if direction != "IN":
+            continue
+        family = "IPv6" if destination.endswith(" (v6)") else "IPv4"
+        destination = destination.removesuffix(" (v6)")
+        relevant = destination in {f"{port}/tcp" for port in ports}
+        if action != "ALLOW":
+            # Even a differently labelled rule may precede and overlap an
+            # allow rule (Anywhere, ranges, application profiles, etc.).
+            ambiguous = True
+            blocked = blocked or relevant
+            continue
+        expected_source = "Anywhere (v6)" if family == "IPv6" else "Anywhere"
+        if not relevant or source != expected_source:
+            ambiguous = True
+            continue
+        allowed[destination.removesuffix("/tcp")].add(family)
+    evidence = "；".join(f"{port}/tcp：{'、'.join(sorted(families))} ALLOW IN"
+                        for port, families in allowed.items() if families)
+    if all(families == {"IPv4", "IPv6"} for families in allowed.values()) and not ambiguous:
+        return _item("UFW 放行", "ok", evidence + "。仅为明确规则记录；不证明外部 SSH 可达。")
+    if evidence:
+        return _item("UFW 放行", "info", evidence + "。其他地址族、来源限制或规则顺序未确认，请独立验证连接。")
+    detail = "存在该端口的限制/拒绝入站规则。" if blocked else "未确认覆盖该端口的无来源限制 ALLOW IN 规则。"
+    return _item("UFW 放行", "warn", detail + "来源、地址族和规则顺序需单独检查；不据此推断连接可达。")
+
+
 def _tuning():
     try:
         info = tuning.TuningManager().inspect()
@@ -265,9 +309,9 @@ def _tuning():
     if state and state.get("invalid"):
         items.append(_item("项目调优", "warn", "状态文件无法解析；不会自动恢复。"))
     elif state:
-        items.append(_item("项目调优", "ok", f"已应用 {len(state['target'])} 项，档位 {tuning.PROFILE_TITLES.get(state['profile'], state['profile'])}。"))
+        items.append(_item("项目调优", "info", f"状态文件记录 {len(state['target'])} 项，档位 {tuning.PROFILE_TITLES.get(state['profile'], state['profile'])}；记录本身不证明所有参数已生效。"))
         if not info["config_matches"]:
-            items.append(_item("配置一致性", "warn", "项目配置文件缺失或被外部修改；恢复会停止。"))
+            items.append(_item("配置一致性", "warn", "项目配置文件缺失或被外部修改；缺失时可按有效快照尝试恢复，内容或运行值被外部修改时会停止。"))
         if state.get("skipped"):
             items.append(_item("跳过的参数", "info", "、".join(state["skipped"])))
     else:
@@ -342,11 +386,7 @@ def _ssh():
         # 检查 UFW 是否放行有效 SSH 端口。
         ufw = checks.run_check("ufw")
         if ufw.state == "ok" and "Status: active" in ufw.output and ports:
-            missing = [port for port in ports if not re.search(rf"(^|\s){re.escape(port)}/tcp\b", ufw.output)]
-            if missing:
-                items.append(_item("UFW 放行", "warn", f"UFW 已启用，但未看到端口 {', '.join(missing)}/tcp 的允许规则。"))
-            else:
-                items.append(_item("UFW 放行", "ok", "UFW 中能看到有效 SSH 端口的 TCP 允许规则。"))
+            items.append(_ssh_ufw_item(ufw.output, ports))
     else:
         items.append(_item("有效 SSH 配置", "unknown", effective_result.output))
     listen = checks.run_check("listening")
@@ -400,7 +440,7 @@ def _ufw_ipv6():
 def _parse_jail(text):
     result = {}
     for key in ("Currently banned", "Total banned", "Currently failed", "Total failed"):
-        match = re.search(rf"^{re.escape(key)}:\s*(\d+)", text, re.MULTILINE)
+        match = re.search(rf"^[\s|`+\-]*{re.escape(key)}:\s*(\d+)\s*$", text, re.MULTILINE)
         if match:
             result[key] = int(match.group(1))
     return result

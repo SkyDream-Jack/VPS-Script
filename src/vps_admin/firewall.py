@@ -6,7 +6,10 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import secrets
+import shlex
+import stat
 import subprocess
 
 from . import bbr, checks, packages
@@ -54,6 +57,34 @@ def ufw_defaults(output):
     raise FirewallFailure("无法读取 UFW 默认策略")
 
 
+def ufw_configured_defaults(text):
+    """只读取静态赋值，绝不 source/eval /etc/default/ufw。"""
+    names = {"DEFAULT_INPUT_POLICY": "incoming", "DEFAULT_OUTPUT_POLICY": "outgoing"}
+    policies = {"DROP": "deny", "ACCEPT": "allow", "REJECT": "reject"}
+    result = {}
+    for line in text.splitlines():
+        try:
+            fields = shlex.split(line, comments=True)
+        except ValueError as exc:
+            raise FirewallFailure("UFW 默认配置包含无法解析的内容") from exc
+        if not fields:
+            continue
+        if len(fields) != 1 or "=" not in fields[0]:
+            raise FirewallFailure("UFW 默认配置不是受支持的静态赋值")
+        name, value = fields[0].split("=", 1)
+        if (not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name)
+                or not re.fullmatch(r"[A-Za-z0-9_./:+ \t-]*", value)):
+            raise FirewallFailure("UFW 默认配置包含动态表达式或不支持的值")
+        if name in names:
+            direction = names[name]
+            if direction in result or value not in policies:
+                raise FirewallFailure("UFW 默认策略重复或无效")
+            result[direction] = policies[value]
+    if set(result) != {"incoming", "outgoing"}:
+        raise FirewallFailure("UFW 默认配置缺少入站或出站策略")
+    return result
+
+
 def port_rule(start, end, protocol):
     if any(type(value) is not int or not 1 <= value <= 65535 for value in (start, end)) or start > end:
         raise FirewallFailure("端口范围无效")
@@ -94,6 +125,23 @@ class FirewallManager:
 
     def defaults(self, ufw):
         return ufw_defaults(self.verbose_status(ufw))
+
+    def configured_defaults(self):
+        path = self.root / "etc/default/ufw"
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022
+                        or (self.root == Path("/") and info.st_uid != 0)):
+                    raise FirewallFailure("UFW 默认配置不是可信的普通文件")
+                data = source.read(65_537)
+            if len(data) > 65_536:
+                raise FirewallFailure("UFW 默认配置过大")
+            return ufw_configured_defaults(data.decode("utf-8"))
+        except (OSError, UnicodeError) as exc:
+            raise FirewallFailure(f"无法安全读取 UFW 默认配置：{exc}") from exc
 
     def ensure_no_competing_services(self, systemctl):
         for service in ("firewalld.service", "nftables.service", "docker.service", "fail2ban.service"):
@@ -149,6 +197,13 @@ class FirewallManager:
         with self.files.locked():
             ufw = self.command("ufw")
             current = self.status(ufw)
+            if current == "active" and protocol == "tcp":
+                try:
+                    current_port = ssh_session_port(os.environ.get("SSH_CONNECTION", ""))
+                except FirewallFailure as exc:
+                    raise FirewallFailure("无法确认当前 SSH 端口；为防止断连，拒绝删除活动 UFW 的 TCP 规则") from exc
+                if start <= current_port <= end:
+                    raise FirewallFailure(f"不能删除包含当前 SSH 端口 {current_port}/tcp 的允许规则；请先通过其他已放行端口建立 SSH 会话")
             result = self.run((ufw, "delete", "allow", rule))
             return f"UFW 当前为 {current}；删除规则命令已执行。\n{result.stdout.strip()}\n请检查是否仍有其他规则放行该端口。"
 
@@ -159,7 +214,8 @@ class FirewallManager:
             ufw = self.command("ufw")
             if self.status(ufw) == "active":
                 return "UFW 已处于 active；没有改变现有规则或默认策略。"
-            defaults = self.defaults(ufw)
+            # inactive 的 status verbose 不输出 Default；从静态配置读取预期策略。
+            defaults = self.configured_defaults()
             if defaults.get("incoming") != "deny":
                 raise FirewallFailure("UFW 默认入站策略不是 deny；请先设置 ufw default deny incoming，避免启用后仍然放行全部入站")
             if defaults.get("outgoing") not in ("allow", "deny"):
@@ -201,6 +257,8 @@ class FirewallManager:
                     # 定时器创建期间其他管理器仍可能发生变化；再次检查，但不能消除并发竞争。
                     self.ensure_no_competing_services(systemctl)
                     self.ensure_no_foreign_rules()
+                    if self.configured_defaults() != defaults:
+                        raise FirewallFailure("UFW 默认策略在操作期间发生变化，未启用")
                     self.run((ufw, "allow", f"{port}/tcp"))
                     (tx_dir / "enable-started").write_text("1\n", encoding="ascii")
                     self.run((ufw, "--force", "enable"), timeout=60)
@@ -208,6 +266,9 @@ class FirewallManager:
                         raise FirewallFailure("启用后 UFW 状态不是 active")
                     snapshot = self.run((ufw, "status", "verbose")).stdout.encode("utf-8")
                     (tx_dir / "expected-status.sha256").write_text(hashlib.sha256(snapshot).hexdigest() + "\n", encoding="ascii")
+                    active_defaults = ufw_defaults(snapshot.decode("utf-8"))
+                    if any(active_defaults.get(direction) != value for direction, value in defaults.items()):
+                        raise FirewallFailure("启用后的 UFW 默认策略与预检不一致，正在尝试恢复")
                 finally:
                     os.close(lock_fd)
                 print(f"UFW 已启用。保留本会话，并立即从另一终端通过端口 {port} 建立新的 SSH 连接。")

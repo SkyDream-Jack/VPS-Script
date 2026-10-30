@@ -1,4 +1,4 @@
-name: Read-only checks
+name: Tests and installer checks
 
 on:
   push:
@@ -38,8 +38,8 @@ jobs:
           head -20 /tmp/vps-status.txt
           ./vps-admin status --json > /tmp/vps-status.json
           python3 -c 'import json; d=json.load(open("/tmp/vps-status.json")); assert d["schema"] == 1; assert len(d["sections"]) >= 10'
-      - name: Exercise one-command test installer and upgrade on disposable Ubuntu 24.04 runner
-        if: matrix.os == 'ubuntu-24.04'
+      - name: Smoke-test published main download entry (separate from checkout installer tests)
+        if: matrix.os == 'ubuntu-24.04' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         timeout-minutes: 5
         run: |
           # 让安装器在干净的 root:root 目录上测试；真实 VPS 的目录检查仍由安装器执行。
@@ -78,6 +78,27 @@ jobs:
           /usr/local/bin/vps-script status system
           run_install /tmp/install-upgrade.log
           /usr/local/bin/vps-script status system | head -5
+
+  installer:
+    name: Checkout installer (${{ matrix.scenario }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [fresh, upgrade]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install package built from this checkout and verify installed bytes
+        timeout-minutes: 5
+        run: |
+          # Real installation is confined to this fresh, disposable GitHub VM.
+          # The upgrade scenario starts from the pinned v0.5.1-dev archive in Git.
+          sudo -n env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            GITHUB_WORKSPACE="$GITHUB_WORKSPACE" /usr/bin/python3 -I -B \
+            "$GITHUB_WORKSPACE/tests/ci_install.py" "${{ matrix.scenario }}"
 
   debian:
     name: ${{ matrix.image }}

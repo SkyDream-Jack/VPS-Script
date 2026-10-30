@@ -36,7 +36,8 @@ def command_for(version, bootstrap_digest, archive_digest):
 def short_command(url):
     # 先下载到私有临时文件，避免 curl 失败时 bash -c "" 静默返回成功，
     # 也避免把 stdin 管道消耗掉导致后续交互确认读到 EOF。
-    return f'f=$(mktemp) && curl -fsSL {url} -o "$f" && sudo bash "$f" && rm -f "$f"'
+    # 文档入口要求 root SSH；不再依赖精简系统可能没有的 sudo，也不丢失 SSH_CONNECTION。
+    return f'f=$(mktemp) && curl -fsSL {url} -o "$f" && bash "$f" && rm -f "$f"'
 
 
 def install_script_for(version, bootstrap_digest, archive_digest):

@@ -149,7 +149,8 @@ class ReleaseTest(unittest.TestCase):
         document = prepare_test_version.document_for(
             "v0.3.0-dev", prepare_test_version.short_command("https://example.invalid/install.sh"),
             "a" * 64, "b" * 64, "c" * 64)
-        self.assertIn("sudo bash", document)
+        self.assertIn('bash "$f"', document)
+        self.assertNotIn('sudo bash', document)
         self.assertIn("短入口", document)
         self.assertIn("可丢弃", document)
 
