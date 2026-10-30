@@ -209,6 +209,17 @@ def verify_backup_entrypoints():
         raise RuntimeError("Read-only installed history created unexpected storage files")
 
 
+def verify_wizard_entrypoint():
+    # Only demo navigation: never invoke any real system initialization on CI.
+    result = subprocess.run((str(LAUNCHER), "init", "--demo", "--experimental"),
+                            input="1 9\ne\nn\ne\nq\n", capture_output=True,
+                            text=True, check=True, timeout=15, cwd="/", env=SAFE_ENV)
+    if "本次向导结果" not in result.stdout or "演示：未执行真实操作" not in result.stdout:
+        raise RuntimeError("Installed wizard did not finish the demo walkthrough")
+    if list(BACKUP_ROOT.iterdir()):
+        raise RuntimeError("Demo wizard created unexpected storage files")
+
+
 def run_scenario(scenario):
     validate_ci_environment()
     prepare_runner_paths()
@@ -239,6 +250,7 @@ def run_scenario(scenario):
         # valid (empty) storage directory, not an unknown sentinel file.
         (BACKUP_ROOT / ".ci-preservation-canary").unlink()
         verify_backup_entrypoints()
+        verify_wizard_entrypoint()
         menu = run_tty((str(LAUNCHER),), "0\n", timeout=30)
         if "v" + version not in menu:
             raise RuntimeError("The installed menu did not display the current version")

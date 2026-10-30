@@ -39,6 +39,8 @@ ACTIONS = {
     "network": AptAction("安装网络诊断工具", ("install", "iproute2", "iputils-ping", "dnsutils", "traceroute"), True, "安装列出的软件及依赖；不会自动发起诊断探测。"),
     "monitor": AptAction("安装常用查看工具", ("install", "htop", "jq"), True, "安装列出的软件及依赖。"),
     "security": AptAction("安装安全工具", ("install", "ufw", "fail2ban", "python3-systemd"), True, "安装 UFW、Fail2ban 和 systemd 日志支持；安装后的服务状态仍需检查。"),
+    "ufw": AptAction("安装 UFW 与规则检查工具", ("install", "ufw", "nftables"), True, "安装 UFW 和 nftables 检查工具；软件包可能启动服务，启用防火墙前仍需检查现有规则和服务。"),
+    "fail2ban": AptAction("安装 Fail2ban", ("install", "fail2ban", "python3-systemd"), True, "安装 Fail2ban 和 systemd 日志支持；安装可能启动服务，应在计划中的 UFW 首次启用之后进行。"),
 }
 
 

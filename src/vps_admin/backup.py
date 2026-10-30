@@ -6,6 +6,7 @@ paths supplied by a record. Browsing never creates storage or runs collectors.
 
 import base64
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -34,6 +35,23 @@ STATES = {
 }
 DETAIL_KEYS = frozenset(("version", "script_sha256", "source", "action", "external_snapshot",
                          "limitation", "source_record"))
+_OBSERVERS = ContextVar("backup_record_observers", default=())
+
+
+@contextmanager
+def observe_records():
+    """Observe only records prepared in this context, including failed operations.
+
+    References contain (Store, ID), never snapshots. Consumers read persisted,
+    redacted history after the operation; observation does not change durability
+    or infer success from a callback's exit code. No scan of concurrent records.
+    """
+    references = []
+    token = _OBSERVERS.set((*_OBSERVERS.get(), references))
+    try:
+        yield references
+    finally:
+        _OBSERVERS.reset(token)
 
 
 class BackupFailure(RuntimeError):
@@ -430,6 +448,8 @@ def _execute_locked(store, module, action, operation, adapter, details, restore_
               "restore_supported": False, "reason": "操作尚未完成，暂不能自动恢复", "details": details,
               "before": before, "after": None, "restores": restores, "restored_by": None, "error_type": ""}
     store._write(record, create=True)
+    for references in _OBSERVERS.get():
+        references.append((store, identifier))
     record["state"] = "running"
     record["updated_at"] = _now()
     store._write(record)

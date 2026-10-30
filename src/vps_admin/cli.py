@@ -5,7 +5,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, backup, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning
+from . import __version__, backup, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning, wizard
 
 DEMO = """【演示数据：不是本机或 VPS 的真实状态】
 系统：示例 Debian / Ubuntu
@@ -101,8 +101,10 @@ def _submenu(title, actions, *, demo=False, experimental=False, sections=None):
 
 
 def _change(run, section):
-    if run() == 0:
+    result = run()
+    if result == 0:
         show_status(section)
+    return result
 
 
 def packages_menu(demo=False, experimental=False):
@@ -127,13 +129,14 @@ def common_menu(demo=False, experimental=False):
     system_menu(demo=demo, experimental=experimental)
 
 
-def _ssh_port(remove, experimental):
+def _ssh_port(remove, experimental, *, report=True):
     port = _ask_int("SSH 端口：")
     if remove:
-        _change(lambda: ssh.change(remove_port=port, experimental=experimental), "ssh")
+        run = lambda: ssh.change(remove_port=port, experimental=experimental)
     else:
         allow = input("修改前尝试放行 UFW 新端口？输入 yes：").strip().lower() == "yes"
-        _change(lambda: ssh.change(new_port=port, open_firewall=allow, experimental=experimental), "ssh")
+        run = lambda: ssh.change(new_port=port, open_firewall=allow, experimental=experimental)
+    return _change(run, "ssh") if report else run()
 
 
 def ssh_menu(demo=False, experimental=False):
@@ -145,19 +148,20 @@ def ssh_menu(demo=False, experimental=False):
     ], demo=demo, experimental=experimental, sections="ssh")
 
 
-def _ufw_rule(remove, experimental):
+def _ufw_rule(remove, experimental, *, report=True):
     error = packages.preflight(experimental)
     if error:
         print(error)
-        return
+        return 2
     start = _ask_int("起始端口：")
     end_text = input("结束端口（单个端口留空）：").strip()
     end = int(end_text) if end_text else start
     protocol = input("协议（tcp / udp）：").strip().lower()
     if remove:
-        _change(lambda: firewall.delete(start, end, protocol, experimental=experimental), "ufw")
+        run = lambda: firewall.delete(start, end, protocol, experimental=experimental)
     else:
-        _change(lambda: firewall.allow(start, end, protocol, experimental=experimental), "ufw")
+        run = lambda: firewall.allow(start, end, protocol, experimental=experimental)
+    return _change(run, "ufw") if report else run()
 
 
 def ufw_menu(demo=False, experimental=False):
@@ -196,7 +200,7 @@ def panel_menu(demo=False, experimental=False):
     ], demo=demo, experimental=experimental, sections="panel")
 
 
-def _hy2_configure(experimental):
+def _hy2_configure(experimental, *, report=True):
     interface = input("接收 UDP 的网络接口：").strip()
     start = _ask_int("跳跃范围起始端口：")
     end = _ask_int("跳跃范围结束端口：")
@@ -206,8 +210,9 @@ def _hy2_configure(experimental):
     if not families:
         raise ValueError("地址族无效")
     allow = input("应用成功后尝试放行 UFW UDP 范围？输入 yes：").strip().lower() == "yes"
-    _change(lambda: hy2.change(hy2.HopSpec(interface, start, end, target, families),
-                              allow_firewall=allow, experimental=experimental), "hy2")
+    run = lambda: hy2.change(hy2.HopSpec(interface, start, end, target, families),
+                            allow_firewall=allow, experimental=experimental)
+    return _change(run, "hy2") if report else run()
 
 
 def hy2_menu(demo=False, experimental=False):
@@ -398,6 +403,46 @@ def maintenance_menu(demo=False, experimental=False):
     ], demo=demo, experimental=experimental)
 
 
+def initialization_steps(experimental=False):
+    """Fixed order, explicit dependencies, and the same guarded module entrypoints."""
+    def apt(name, note):
+        return wizard.Step(name, packages.ACTIONS[name].title, "packages",
+                           lambda: packages.run_action(name, experimental=experimental),
+                           ("packages", name), note)
+    return (
+        apt("update", "只更新已有软件源的索引；不会替换源。"),
+        apt("upgrade", "可选：可能重启服务或需要重启系统，不会在向导中自动重启；不能依靠本工具完整撤销。"),
+        apt("base", "安装基础工具；网络诊断和监控工具仍可从系统菜单单独安装。"),
+        wizard.Step("swap", "创建项目 swap", "swap", lambda: swap.change(experimental=experimental),
+                    ("swap", "create"), "按当前内存、磁盘和已有 swap 检查；已有其他 swap 时停止。"),
+        wizard.Step("timezone", "设置时区", "timezone", lambda: common.timezone_change(experimental=experimental),
+                    ("timezone", "set"), "按需设置时区；不改变时钟或 NTP。"),
+        apt("ufw", "先安装 UFW 和规则检查工具，再检查/放行/启用；安装可能启动服务，不能据此断言安全。"),
+        wizard.Step("ufw-allow", "放行业务端口或范围", "ufw", lambda: _ufw_rule(False, experimental, report=False),
+                    ("ufw", "allow"), "依赖已安装 UFW；先准备所有业务端口及云防火墙。可再次 E + RETRY 添加另一条规则。"),
+        wizard.Step("ufw-enable", "启用 UFW 并验证管理连接", "ufw", lambda: firewall.enable(experimental=experimental),
+                    ("ufw", "enable"), "先完成必要端口放行。保留当前 SSH 端口；需第二会话验证。已有 Fail2ban/Docker/nftables 等活动服务或规则时仍拒绝，不自动停止它们。"),
+        wizard.Step("ssh-port", "新增 SSH 端口（保留旧端口）", "ssh", lambda: _ssh_port(False, experimental, report=False),
+                    ("ssh", "add-port"), "可选：先确认云防火墙；UFW 已启用时需要允许新端口。保持当前会话，按原流程验证第二会话；关闭旧端口留到 SSH 菜单单独处理。"),
+        wizard.Step("ssh-key", "SSH 仅允许公钥认证", "ssh", lambda: ssh.change(key_only=True, experimental=experimental),
+                    ("ssh", "key-only"), "独立于改端口；确认所有账户影响并实际验证公钥新连接，仍使用原有超时回退。"),
+        apt("fail2ban", "可能立即启动服务；放在计划中的 UFW 首次启用之后。保留旧的合并安装安全工具入口。"),
+        wizard.Step("fail2ban-config", "配置 Fail2ban SSH jail", "fail2ban", lambda: fail2ban.configure(experimental=experimental),
+                    ("fail2ban", "configure"), "依赖已安装并运行 Fail2ban；读取当前 SSH 端口与 UFW 状态，保留其他 jail。"),
+        wizard.Step("bbr", "配置 BBR / fq", "bbr", lambda: bbr.change(experimental=experimental),
+                    ("bbr", "apply"), "可选 TCP 调整，不表示 Hy2 的 QUIC 性能提升；高级内核调优仍从网络菜单单独选择。"),
+        wizard.Step("panel", f"首次安装 3x-ui {panel.VERSION}", "panel", lambda: panel.install(experimental=experimental),
+                    ("panel", "install"), "可选第三方安装，仍显示来源并单独确认；已有安装时停止，工具记录不能完整撤销。业务端口需单独放行。"),
+        wizard.Step("hy2", "配置已有 Hy2 服务的端口跳跃", "hy2", lambda: _hy2_configure(experimental, report=False),
+                    ("hy2", "apply"), "仅管理转发：必须已有实际 UDP 监听，需自行确认云防火墙和客户端。可先退出配置服务，再重新进入向导。"),
+    )
+
+
+def initialization_menu(demo=False, experimental=False):
+    return wizard.run(initialization_steps(experimental), inspect=show_status, recover=backup_menu,
+                      demo=demo, experimental=experimental)
+
+
 def menu(demo=False, experimental=False) -> int:
     modify = experimental and not demo
     overview = None if demo else status.collect_overview()
@@ -413,12 +458,14 @@ def menu(demo=False, experimental=False) -> int:
         print("首页摘要为上次读取的快照；操作后可按 R 刷新。")
         for number, (label, _) in enumerate(routes, 1):
             print(f"{number}. {label}")
-        print("M. 切换只读 / 修改模式\nR. 刷新首页状态（只读）\n0. 退出")
+        print("I. 初始化向导\nM. 切换只读 / 修改模式\nR. 刷新首页状态（只读）\n0. 退出")
         try:
             choice = input("请选择：").strip().lower()
             if choice in ("0", "q"):
                 return 0
-            if choice == "r":
+            if choice == "i":
+                initialization_menu(demo=demo, experimental=modify)
+            elif choice == "r":
                 if not demo:
                     overview = status.collect_overview()
             elif choice == "m":
@@ -448,7 +495,7 @@ def menu(demo=False, experimental=False) -> int:
 def main(argv=None) -> int:
     sections = tuple(status.SECTIONS) + tuple(status.ALIASES) + ("all",)
     parser = argparse.ArgumentParser(prog="vps-admin", description="VPS 初始化与日常管理工具")
-    parser.add_argument("action", nargs="?", choices=("menu", "status", "doctor", "version", "history", "restore"), default="menu")
+    parser.add_argument("action", nargs="?", choices=("menu", "init", "status", "doctor", "version", "history", "restore"), default="menu")
     parser.add_argument("section", nargs="?", default="all", help="状态分类或 history/restore 的记录 ID")
     parser.add_argument("--demo", action="store_true", help="展示虚构数据，不检查本机")
     parser.add_argument("--json", action="store_true", help="状态查询以 JSON 输出")
@@ -466,8 +513,8 @@ def main(argv=None) -> int:
     if args.action == "version":
         print(__version__)
         return 0
-    if args.action == "menu" and args.section != "all":
-        parser.error("菜单模式不接受检查分类")
+    if args.action in ("menu", "init") and args.section != "all":
+        parser.error("菜单/向导模式不接受检查分类")
     if args.json and args.action not in ("status", "doctor", "history"):
         parser.error("--json 只能与 status、doctor 或 history 一起使用")
     if not args.demo and platform.system() != "Linux":
@@ -491,8 +538,10 @@ def main(argv=None) -> int:
         except KeyboardInterrupt:
             print("\n恢复被中断，请查看记录及原模块回退结果。")
             return 130
-    if args.action == "menu":
+    if args.action in ("menu", "init"):
         try:
+            if args.action == "init":
+                return initialization_menu(demo=args.demo, experimental=args.experimental)
             return menu(demo=args.demo, experimental=args.experimental)
         except KeyboardInterrupt:
             print("\n已退出。")

@@ -123,6 +123,8 @@ def document_for(version, install_command, bootstrap_digest, archive_digest, ins
 {extra}
 升级：再次运行同一命令即可；会替换 `/opt/vps-script`，保留 `/etc`、`/var` 中的系统配置。安装路径为 `/opt/vps-script`，启动命令为 `/usr/local/bin/vps-script`。之后以 root 运行 `vps-script --experimental` 打开修改菜单；`vps-script` 默认只读。更新与卸载系统配置仍需使用各模块自己的恢复/移除功能。
 
+初始化向导：安装后在首页按 `I`，或运行 `vps-script init --experimental`。先选择步骤，再按 `E` 进入单项确认，`N` 进入下一步，`S` 跳过，`H` 查看记录/恢复；步骤选择处 `Q`/`0` 退出。参数确认过程中可 Ctrl+C 退出。已经执行的修改与记录保留，再次进入重新检查，不自动续跑；只读规划使用 `vps-script init`，演示使用 `vps-script init --demo`。
+
 入口 SHA-256：`{bootstrap_digest}`
 
 测试包 SHA-256：`{archive_digest}`

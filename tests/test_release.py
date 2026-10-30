@@ -21,7 +21,7 @@ from release import build_release, prepare_test_version
 
 class ReleaseTest(unittest.TestCase):
     def test_new_runtime_modules_are_in_download_build_and_installer_manifests(self):
-        expected = {"backup.py", "backup_access.py", "backup_network.py"}
+        expected = {"backup.py", "backup_access.py", "backup_network.py", "wizard.py"}
         installer = (PROJECT / "install-local.sh").read_text()
         modules_line = next(line for line in installer.splitlines() if line.startswith("modules=("))
         modules = set(shlex.split(modules_line[len("modules=("):-1]))
@@ -45,11 +45,19 @@ class ReleaseTest(unittest.TestCase):
             # Isolated import resolves only packaged project modules, not the
             # working checkout; -B keeps verification from altering the tree.
             code = ("import sys; sys.path.insert(0, sys.argv[1]); "
-                    "from vps_admin import backup, backup_access, backup_network")
+                    "from vps_admin import backup, backup_access, backup_network, wizard")
             imported = subprocess.run((sys.executable, "-I", "-B", "-c", code, str(unpacked / "src")),
                                       cwd=root, capture_output=True, text=True, timeout=15)
             self.assertEqual(imported.returncode, 0, imported.stderr)
             self.assertEqual(imported.stdout, "")
+            walked = subprocess.run((sys.executable, "-I", "-B", "-c",
+                                    "import sys; sys.path.insert(0, sys.argv[1]); "
+                                    "from vps_admin.cli import main; raise SystemExit(main(['init', '--demo']))",
+                                    str(unpacked / "src")), cwd=root, input="1 9\ne\nn\ne\nq\n",
+                                   capture_output=True, text=True, timeout=15)
+            self.assertEqual(walked.returncode, 0, walked.stderr)
+            self.assertIn("本次向导结果", walked.stdout)
+            self.assertIn("演示：未执行真实操作", walked.stdout)
             self.assertFalse(tuple(unpacked.rglob("__pycache__")))
 
     def test_invalid_version_and_existing_outputs_are_rejected(self):
