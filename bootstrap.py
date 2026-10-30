@@ -33,7 +33,8 @@ FILES = frozenset({
     "src/vps_admin/ssh.py", "src/vps_admin/ssh_rollback.py", "src/vps_admin/status.py",
     "src/vps_admin/swap.py", "src/vps_admin/common.py", "src/vps_admin/tuning.py", "src/vps_admin/bench.py", "src/vps_admin/external.py",
     "src/vps_admin/backup.py", "src/vps_admin/backup_access.py", "src/vps_admin/backup_network.py",
-    "src/vps_admin/wizard.py",
+    "src/vps_admin/wizard.py", "src/vps_admin/access_transactions.py",
+    "src/vps_admin/bounded.py", "src/vps_admin/audit.py", "src/vps_admin/security_scan.py",
 })
 EXECUTABLE = frozenset({"vps-admin", "install-local.sh", "bootstrap.py"})
 

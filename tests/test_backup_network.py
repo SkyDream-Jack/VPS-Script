@@ -472,9 +472,9 @@ class BackupNetworkIntegrationTest(unittest.TestCase):
                 def tracked(module, action, operation, **kwargs):
                     calls.append((module, action))
                     return operation()
-                def firewall_done(spec):
+                def firewall_done(spec, *, with_result=False):
                     self.assertEqual(calls, [("hy2", "apply")])
-                    return "firewall recorded separately"
+                    return ("firewall recorded separately", 0) if with_result else "firewall recorded separately"
                 with patch.object(hy2.packages, "preflight", return_value=None), \
                      patch.object(Path, "is_dir", return_value=True), \
                      patch.object(hy2, "Hy2Manager", return_value=manager), \

@@ -171,9 +171,14 @@ class UFWAdapter:
         if reason:
             raise backup.BackupFailure(reason)
         with self.manager.files.locked():
+            from . import access_transactions
+            access_transactions.require_settled(self.root)
             _same(self, after)
             ufw = self.manager.command("ufw")
             if before["state"] == "inactive" and after["state"] == "active":
+                # A later Fail2ban jail is not part of the UFW snapshot. Do not
+                # silently invalidate its bans, or an unknown manager's rules.
+                self.manager.ensure_no_competing_services(self.manager.command("systemctl"))
                 print("恢复将关闭 UFW 防护，保留已有 allow 规则；不会删除规则或重置其他防火墙。")
                 self.manager.run((ufw, "--force", "disable"))
                 current = self.capture()

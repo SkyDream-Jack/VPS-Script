@@ -125,6 +125,8 @@ def document_for(version, install_command, bootstrap_digest, archive_digest, ins
 
 初始化向导：安装后在首页按 `I`，或运行 `vps-script init --experimental`。先选择步骤，再按 `E` 进入单项确认，`N` 进入下一步，`S` 跳过，`H` 查看记录/恢复；步骤选择处 `Q`/`0` 退出。参数确认过程中可 Ctrl+C 退出。已经执行的修改与记录保留，再次进入重新检查，不自动续跑；只读规划使用 `vps-script init`，演示使用 `vps-script init --demo`。
 
+安全检查：先运行 `vps-script audit` 或 `vps-script audit --json`（只读、不联网）。菜单 `2 → 4` 提供可选文件校验、限范围 ClamAV 和逐项加固。扫描需单独确认，不自动清理；缺少工具、病毒库过期或可用内存不足 3.25 GiB 时不会开始。报告不证明 VPS 未入侵；SSH/UFW 修改及真实业务仍需独立验收。
+
 入口 SHA-256：`{bootstrap_digest}`
 
 测试包 SHA-256：`{archive_digest}`

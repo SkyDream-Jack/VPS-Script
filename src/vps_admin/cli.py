@@ -5,7 +5,7 @@ import platform
 import sys
 from pathlib import Path
 
-from . import __version__, backup, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, ssh, status, swap, tuning, wizard
+from . import __version__, audit, backup, bbr, bench, checks, common, external, fail2ban, firewall, hy2, packages, panel, security_scan, ssh, status, swap, tuning, wizard
 
 DEMO = """【演示数据：不是本机或 VPS 的真实状态】
 系统：示例 Debian / Ubuntu
@@ -190,7 +190,42 @@ def security_menu(demo=False, experimental=False):
         ("SSH 登录", lambda: ssh_menu(demo=demo, experimental=experimental), "nav"),
         ("UFW 防火墙", lambda: ufw_menu(demo=demo, experimental=experimental), "nav"),
         ("Fail2ban", lambda: fail2ban_menu(demo=demo, experimental=experimental), "nav"),
+        ("安全体检、可选扫描与逐项加固", lambda: audit_menu(demo=demo, experimental=experimental), "nav"),
     ], demo=demo, experimental=experimental, sections="security")
+
+
+def _refresh_fail2ban(experimental):
+    error = packages.preflight(experimental)
+    if error:
+        print("未执行：" + error)
+        return 2
+    if input("将备份并刷新项目 SSH jail 端口；输入 YES 继续：").strip() != "YES":
+        return 0
+    return _change(fail2ban.refresh_ports, "fail2ban")
+
+
+def security_repair_menu(demo=False, experimental=False):
+    print("按项修复防护配置：每项重新检查、先备份再修改；SSH/UFW 继续要求独立连接验证。")
+    print("这里不自动删除扫描命中的文件或停用陌生服务。先核实来源，避免损坏 SSH、代理或其他业务。")
+    _submenu("逐项加固与恢复", [
+        ("SSH 改为仅密钥登录", lambda: _change(lambda: ssh.change(key_only=True, experimental=experimental), "ssh"), "modify"),
+        ("首次启用 UFW（先规划 SSH/业务放行）", lambda: _change(lambda: firewall.enable(experimental=experimental), "ufw"), "modify"),
+        ("配置项目 Fail2ban SSH jail", lambda: _change(lambda: fail2ban.configure(experimental=experimental), "fail2ban"), "modify"),
+        ("刷新项目 Fail2ban 的 SSH 端口", lambda: _refresh_fail2ban(experimental), "modify"),
+        ("备份记录与恢复", lambda: backup_menu(demo=demo, experimental=experimental), "nav"),
+    ], demo=demo, experimental=experimental, sections="security")
+
+
+def audit_menu(demo=False, experimental=False):
+    _submenu("安全体检与可选扫描", [
+        ("只读安全体检", lambda: print(audit.render(audit.collect())), "read"),
+        ("软件包文件完整性检查（只读，最多 60 秒）", security_scan.package_integrity, "read"),
+        ("ClamAV 扫描临时目录（只读内容，有负载）", lambda: security_scan.interactive("temporary"), "read"),
+        ("ClamAV 扫描本地程序目录（只读内容，有负载）", lambda: security_scan.interactive("programs"), "read"),
+        ("ClamAV 扫描网站文件目录（只读内容，有负载）", lambda: security_scan.interactive("web"), "read"),
+        ("安装 ClamAV 与病毒库更新工具", lambda: packages.run_action("clamav", experimental=experimental), "modify"),
+        ("逐项加固与备份恢复", lambda: security_repair_menu(demo=demo, experimental=experimental), "nav"),
+    ], demo=demo, experimental=experimental)
 
 
 def panel_menu(demo=False, experimental=False):
@@ -495,13 +530,18 @@ def menu(demo=False, experimental=False) -> int:
 def main(argv=None) -> int:
     sections = tuple(status.SECTIONS) + tuple(status.ALIASES) + ("all",)
     parser = argparse.ArgumentParser(prog="vps-admin", description="VPS 初始化与日常管理工具")
-    parser.add_argument("action", nargs="?", choices=("menu", "init", "status", "doctor", "version", "history", "restore"), default="menu")
+    parser.add_argument("action", nargs="?", choices=("menu", "init", "status", "doctor", "version", "history", "restore", "audit", "scan"), default="menu")
     parser.add_argument("section", nargs="?", default="all", help="状态分类或 history/restore 的记录 ID")
     parser.add_argument("--demo", action="store_true", help="展示虚构数据，不检查本机")
     parser.add_argument("--json", action="store_true", help="状态查询以 JSON 输出")
     parser.add_argument("--experimental", action="store_true", help="启用未通过真实 VPS 验证的系统修改")
+    parser.add_argument("--scope", choices=tuple(security_scan.SCOPES), default=None, help="scan 的固定扫描范围，默认 temporary")
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
+    if args.scope is not None and args.action != "scan":
+        parser.error("--scope 只能与 scan 使用")
+    if args.action in ("audit", "scan") and args.section != "all":
+        parser.error("audit/scan 不接受状态分类或文件路径")
 
     if args.action not in ("history", "restore") and args.section not in sections:
         parser.error("未知状态分类")
@@ -515,11 +555,24 @@ def main(argv=None) -> int:
         return 0
     if args.action in ("menu", "init") and args.section != "all":
         parser.error("菜单/向导模式不接受检查分类")
-    if args.json and args.action not in ("status", "doctor", "history"):
-        parser.error("--json 只能与 status、doctor 或 history 一起使用")
+    if args.json and args.action not in ("status", "doctor", "history", "audit"):
+        parser.error("--json 只能与 status、doctor、history 或 audit 一起使用")
     if not args.demo and platform.system() != "Linux":
         print("真实状态查询和修改仅在 Linux 上可用；可用 --demo 查看界面。", file=sys.stderr)
         return 2
+    if args.action in ("audit", "scan"):
+        try:
+            if args.action == "audit":
+                report = audit.collect(demo=args.demo)
+                print(status.dumps(report) if args.json else audit.render(report))
+                return 0  # Report generation succeeded; risk/coverage live in the report.
+            if args.demo:
+                print(DEMO)
+                return 0
+            return security_scan.interactive(args.scope or "temporary")
+        except KeyboardInterrupt:
+            print("\n检查已中断；不能把部分结果视为完成。")
+            return 130
     if args.action == "history":
         try:
             payload = ({"schema": 1, "demo": True, "storage": "演示数据", "records": []} if args.demo

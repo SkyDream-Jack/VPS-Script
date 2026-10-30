@@ -369,22 +369,24 @@ class Hy2Manager:
             return "已移除本项目的转发和开机服务；未改动 UFW 或云防火墙。"
 
 
-def allow_ufw(spec):
-    """在 UFW 已启用时放行跳跃范围和目标 UDP 端口；失败只提示。"""
+def allow_ufw(spec, *, with_result=False):
+    """Keep the legacy text return; callers can also request the exit status."""
+    def result(message, code):
+        return (message, code) if with_result else message
     try:
         manager = firewall.FirewallManager()
         ufw = manager.command("ufw")
         if manager.status(ufw) != "active":
-            return "UFW 未启用；没有添加规则。启用 UFW 前请先规划 SSH 和业务端口。"
+            return result("UFW 未启用；没有添加规则。启用 UFW 前请先规划 SSH 和业务端口。", 1)
         messages = [
             backup.track("ufw", "allow", lambda: manager.allow(spec.start, spec.end, "udp"),
                          details={"action": "Hy2 UDP 跳跃范围放行"}),
             backup.track("ufw", "allow", lambda: manager.allow(spec.target, spec.target, "udp"),
                          details={"action": "Hy2 UDP 目标端口放行"}),
         ]
-        return "UFW 已添加 UDP 跳跃范围和目标端口规则；云防火墙仍需单独放行。\n" + "\n".join(messages)
+        return result("UFW 已添加 UDP 跳跃范围和目标端口规则；云防火墙仍需单独放行。\n" + "\n".join(messages), 0)
     except (firewall.FirewallFailure, bbr.BBRFailure, backup.BackupFailure, OSError) as exc:
-        return f"UFW 放行未全部完成：{exc}；此前成功的规则保留并单独记录，请检查 UDP {spec.start}-{spec.end} 和目标 {spec.target}。"
+        return result(f"UFW 放行未全部完成：{exc}；此前成功的规则保留并单独记录，请检查 UDP {spec.start}-{spec.end} 和目标 {spec.target}。", 1)
 
 
 def change(spec=None, remove=False, allow_firewall=False, experimental=False):
@@ -425,7 +427,11 @@ def change(spec=None, remove=False, allow_firewall=False, experimental=False):
         result = backup.track("hy2", "remove" if remove else "apply", operation)
         print(result)
         if not remove and allow_firewall:
-            print(allow_ufw(spec))
+            message, code = allow_ufw(spec, with_result=True)
+            print(message)
+            if code:
+                print("Hy2 转发已配置，但请求的 UFW 放行未完成；本步骤按部分失败处理。")
+                return code
         if remove:
             print("UFW 中此前为 Hy2 添加的规则不会自动删除；如需要请手动检查。")
         return 0

@@ -12,7 +12,7 @@ import platform
 import re
 import shutil
 
-from . import bbr, checks, common, fail2ban, hy2, packages, panel, swap, tuning
+from . import access_transactions, bbr, checks, common, fail2ban, hy2, packages, panel, swap, tuning
 
 SECTIONS = {
     "system": "系统概览",
@@ -625,6 +625,15 @@ def collect_selected(names, section="overview"):
         if name not in _COLLECTORS:
             raise KeyError(name)
     sections = []
+    pending_item = None
+    if any(name in ("ssh", "ufw") for name in selected):
+        try:
+            pending = access_transactions.pending()
+            if pending:
+                detail = "; ".join(f"{row['module']}:{row['id']} {row['phase']}" for row in pending[:5])
+                pending_item = _item("未结束的访问回滚", "warn", detail + "；禁止继续访问配置变更，请用 audit 核实。")
+        except Exception:
+            pending_item = _item("访问回滚状态", "unknown", "无法读取事务目录；不能确认旧定时回退是否结束。")
     for name in selected:
         try:
             sections.append(_COLLECTORS[name]())
@@ -633,6 +642,8 @@ def collect_selected(names, section="overview"):
                 "name": name, "title": SECTIONS.get(name, name), "facts": {},
                 "items": [_item("检查失败", "unknown", f"{type(exc).__name__}: {exc}")],
             })
+        if name in ("ssh", "ufw") and pending_item:
+            sections[-1]["items"].append(dict(pending_item))
     return {
         "schema": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),

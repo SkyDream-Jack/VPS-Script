@@ -119,7 +119,7 @@ class SnapshotFirewall(FakeFirewall):
         self.persist()
 
     def persist(self):
-        (self.root / "etc/ufw/ufw.conf").write_text("ENABLED=" + ("yes" if self.active else "no") + "\n")
+        (self.root / "etc/ufw/ufw.conf").write_text("ENABLED=" + ("yes" if self.active else "no") + "\nLOGLEVEL=low\n")
         (self.root / "etc/ufw/user.rules").write_text("\n".join(self.rules) + "\n")
         (self.root / "etc/ufw/user6.rules").write_text("\n".join(self.rules) + "\n")
 
@@ -172,6 +172,15 @@ class UFWHistoryTest(AccessFixture):
         self.assertIn("allow 规则保留", result)
         self.assertFalse(self.fake.active)
         self.assertEqual(self.fake.rules, ["22/tcp"])
+
+    def test_later_fail2ban_blocks_ufw_disable_recovery(self):
+        record = self.track("ufw", "enable", lambda: self.manager.enable(22, lambda: True))
+        self.fake.competing = "fail2ban.service"
+        with self.assertRaisesRegex(backup.BackupFailure, "fail2ban.service"):
+            backup.restore_record(record["id"], store=self.store, adapter=self.adapter)
+        self.assertTrue(self.fake.active)
+        self.assertEqual(self.store.read(record["id"])["state"], "completed")
+        self.assertFalse(any(args[1:] == ("--force", "disable") for args in self.fake.calls))
 
     def test_deleted_allow_is_backup_only_and_not_appended_on_restore(self):
         self.fake.rules = ["443/tcp"]

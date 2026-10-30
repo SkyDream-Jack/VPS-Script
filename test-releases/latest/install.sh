@@ -1,10 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION='v0.8.0-dev'
-BOOTSTRAP_SHA='5a50825d7b53a4ba9060c78a58864401f609621d387a7db8c4cf6c03784c98b4'
-ARCHIVE_SHA='054ffe083c89b9f29fad74955659cbe5fc5407baefda7ca878ca31de1a41a1ff'
-BASE='https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.8.0-dev'
+VERSION='v0.9.0-dev'
+BOOTSTRAP_SHA='0c7f29201c096958354340d7af37396460b0beb85459cddc0cd58b7ce100ab4b'
+ARCHIVE_SHA='56413100e2272e75480dfbc9609cdfa160cebda348d9d2f3a3c76d6857ba9974'
+BASE='https://raw.githubusercontent.com/SkyDream-Jack/VPS-Script/main/test-releases/v0.9.0-dev'
 
 if [[ $(uname -s) != Linux ]]; then
   printf '%s\n' '只支持 Linux。' >&2

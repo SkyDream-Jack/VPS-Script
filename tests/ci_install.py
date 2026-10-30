@@ -218,6 +218,13 @@ def verify_wizard_entrypoint():
         raise RuntimeError("Installed wizard did not finish the demo walkthrough")
     if list(BACKUP_ROOT.iterdir()):
         raise RuntimeError("Demo wizard created unexpected storage files")
+    report = subprocess.run((str(LAUNCHER), "audit", "--demo", "--json"), capture_output=True,
+                            text=True, check=True, timeout=15, cwd="/", env=SAFE_ENV)
+    data = json.loads(report.stdout)
+    if data.get("kind") != "security-audit" or data.get("demo") is not True:
+        raise RuntimeError("Installed audit demo did not preserve its schema")
+    subprocess.run((str(LAUNCHER), "scan", "--demo", "--scope", "temporary"),
+                   capture_output=True, check=True, timeout=15, cwd="/", env=SAFE_ENV)
 
 
 def run_scenario(scenario):

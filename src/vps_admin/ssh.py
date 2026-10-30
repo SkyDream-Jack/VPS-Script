@@ -252,6 +252,8 @@ class SSHManager:
         if remove_port == current_port:
             raise SSHFailure("不能关闭当前 SSH 会话使用的端口")
         with self.files.locked():
+            from . import access_transactions
+            access_transactions.require_settled(self.root, SSHFailure)
             if restoring and _restore_check is not None:
                 _restore_check()
             if not (self.root / "run/systemd/system").is_dir():
@@ -330,11 +332,15 @@ class SSHManager:
                      "after_sha256": hashlib.sha256(after).hexdigest() if after is not None else None}
             self.files._atomic_create(tx_dir / "state.json", (json.dumps(state) + "\n").encode(), 0o600)
             unit = "vps-script-ssh-" + tx_dir.name
-            self.run((systemd_run, "--unit=" + unit, "--on-active=180s", "/usr/bin/python3", "-I", "-B", str(worker), str(tx_dir)))
             timer = unit + ".timer"
-            active = self.run((systemctl, "is-active", timer), check=False)
-            if active.returncode != 0 or active.stdout.strip() != "active":
-                raise SSHFailure("未能确认 SSH 回滚定时器，未修改配置")
+            try:
+                self.run((systemd_run, "--unit=" + unit, "--on-active=180s", "/usr/bin/python3", "-I", "-B", str(worker), str(tx_dir)))
+                active = self.run((systemctl, "is-active", timer), check=False)
+                if active.returncode != 0 or active.stdout.strip() != "active":
+                    raise SSHFailure("未能确认 SSH 回滚定时器，未修改配置")
+            except BaseException:
+                (tx_dir / "expired").write_text("not applied\n", encoding="ascii")
+                raise
             try:
                 lock = os.open(tx_dir / "lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
                 try:
@@ -404,6 +410,7 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
     if error:
         print(f"未执行：{error}")
         return 2
+    partial = False
     try:
         connection = os.environ.get("SSH_CONNECTION", "").split()
         current_port = firewall.ssh_session_port(" ".join(connection))
@@ -442,10 +449,11 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
                                    lambda: firewall.FirewallManager().allow(new_port, new_port, "tcp"),
                                    details={"action": f"allow {new_port}/tcp"}))
             except (backup.BackupFailure, firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
+                partial = True
                 print(f"UFW 放行未完成：{exc}；请手动确认后再继续。")
                 if input("输入 CONTINUE 跳过 UFW 放行继续，其他内容取消：").strip() != "CONTINUE":
                     print("已取消。")
-                    return 0
+                    return 1
         def verify():
             try:
                 return input("第二个 SSH 会话已成功登录后输入 VERIFIED：").strip() == "VERIFIED"
@@ -463,14 +471,17 @@ def change(new_port=None, remove_port=None, key_only=False, open_firewall=False,
         if new_port is not None or remove_port is not None:
             try:
                 from . import fail2ban
-                fail2ban.refresh_ports()
+                if fail2ban.refresh_ports() != 0:
+                    print("SSH 已完成，但 Fail2ban 端口刷新未完成；请检查防护范围和独立记录。")
+                    return 1
             except Exception as exc:
-                # 端口已经变更；Fail2ban 刷新失败只提示，不影响 SSH 结果。
+                # Preserve the successful SSH change, but do not report total success.
                 print(f"Fail2ban 端口刷新未完成：{exc}")
-        return 0
+                return 1
+        return 1 if partial else 0
     except EOFError:
         print("已取消。")
-        return 0
+        return 1 if partial else 0
     except (backup.BackupFailure, SSHFailure, firewall.FirewallFailure, bbr.BBRFailure, OSError) as exc:
         print(f"操作未完成：{exc}")
         return 1

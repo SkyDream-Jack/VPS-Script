@@ -507,6 +507,9 @@ def track(module, action, operation, *, adapter=None, details=None, restore_supp
     try:
         adapter = adapter or get_adapter(module, root=store.root)
         with store.locked():
+            if module in ("ssh", "ufw", "fail2ban", "hy2"):
+                from . import access_transactions
+                access_transactions.require_settled(store.root)
             result, _ = _execute_locked(store, module, action, operation, adapter, details, restore_supported)
             return result
     except BackupFailure:
@@ -521,6 +524,9 @@ def restore_record(identifier, *, store=None, adapter=None):
     try:
         with store.locked():
             source = store.read(identifier)
+            if source["module"] in ("ssh", "ufw", "fail2ban", "hy2"):
+                from . import access_transactions
+                access_transactions.require_settled(store.root)
             if source["state"] != "completed" or not source["restore_supported"] or source["after"] is None:
                 raise BackupFailure("该记录不支持自动恢复：" + source["reason"])
             adapter = adapter or get_adapter(source["module"], root=store.root)
@@ -625,8 +631,14 @@ def restore(identifier, experimental=False):
         if record["module"] == "ssh":
             # Separate transaction after releasing the global journal lock.
             from . import fail2ban
-            if fail2ban.refresh_ports() != 0:
+            try:
+                refreshed = fail2ban.refresh_ports()
+            except Exception as exc:
+                print(f"SSH 已恢复，但 Fail2ban 刷新异常（{type(exc).__name__}）；不要重复恢复 SSH。")
+                return 1
+            if refreshed != 0:
                 print("SSH 恢复命令完成，但 Fail2ban 端口刷新未完成；请检查其独立记录和实际防护范围。")
+                return 1
         return 0
     except EOFError:
         print("已取消。")

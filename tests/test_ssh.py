@@ -163,6 +163,20 @@ class SSHTest(unittest.TestCase):
             self.change(new_port=2222, verify=lambda: True)
         self.assertFalse(self.fake.target.exists())
 
+    def test_pending_old_worker_blocks_even_already_configured_port(self):
+        self.change(new_port=2222, verify=lambda: True)
+        old = self.fake.tx_dir
+        (old / "confirmed").unlink()
+        before = self.fake.target.read_bytes()
+        calls = len(self.fake.calls)
+        with self.assertRaisesRegex(ssh.SSHFailure, "未结束"):
+            self.change(new_port=2222, verify=lambda: True)
+        self.assertEqual(len(self.fake.calls), calls)
+        self.assertEqual(self.fake.target.read_bytes(), before)
+        self.assertEqual(ssh_rollback.run(old, target_override=self.fake.target, runner=self.fake), 0)
+        self.change(new_port=2222, verify=lambda: True)
+        self.assertEqual(self.fake.ports, {22, 2222})
+
     def test_socket_activation_restarts_socket(self):
         self.fake.socket_mode = True
         self.change(new_port=2222, verify=lambda: True)

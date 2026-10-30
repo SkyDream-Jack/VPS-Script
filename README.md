@@ -2,7 +2,7 @@
 
 面向 Ubuntu / Debian 新 VPS 的初始化与日常管理面板。在 SSH 终端里按需选择功能，执行前显示影响，执行后给出只读状态；默认只读，修改需要显式启用。
 
-当前版本：**v0.8.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
+当前版本：**v0.9.0-dev（开发/测试版）**。自动化测试覆盖解析、参数、回滚模拟和安装包校验，但系统修改、SSH/防火墙超时恢复、3x-ui 与 Hy2 端到端仍未在真实 VPS 上完成验收，**不要直接用于唯一的生产入口**。请先准备服务商控制台、快照和第二个 SSH 会话。
 
 ## 一键安装 / 升级
 
@@ -23,6 +23,24 @@ vps-script              # 只读模式
 vps-script --experimental   # 修改模式
 vps-script status       # 全部只读状态
 ```
+
+## 安全体检与可选扫描
+
+从 `2 SSH 与安全 → 4 安全体检、可选扫描与逐项加固` 进入。先执行只读体检，也可直接运行：
+
+```bash
+sudo vps-script audit                 # 本机只读安全证据
+sudo vps-script audit --json          # 独立的 security-audit JSON 报告
+sudo vps-script scan --scope temporary # 确认后扫描 /tmp 与 /var/tmp
+```
+
+体检分别检查未结束的 SSH/UFW 回滚、SSH 有效认证、UFW 与项目 Fail2ban 动作、本地账户/公钥指纹、近期登录样本、监听/进程以及常见持久化入口。报告区分风险、需核实、信息、单项符合条件和未知，不输出私钥、进程参数/环境变量或原始认证日志，不联网、不安装、不更改配置。标准密钥路径、日志样本、进程/条目数量均有限制；自定义认证、远程账户、用户级服务和容器等并未全面覆盖。分享报告前仍需遮盖 IP、账户和文件路径。
+
+可单独选择 `dpkg --verify` 文件校验或 ClamAV 扫描。扫描范围还可选 `programs`（`/usr/local/bin`、`/usr/local/sbin`、`/opt`）、`web`（`/var/www`）；不接受任意路径或全盘选项。只用本地官方病毒库并要求库不超过 7 天，依赖缺失/版本不支持时停止。每次最多 2000 个文件、256 MiB、单文件 16 MiB、10 分钟，低优先级且进程虚拟内存上限 3 GiB；可用内存小于 3.25 GiB 时不启动。小内存 VPS 可先做轻量体检与文件校验，必要时用隔离副本扫描。扫描会在 `/run/vps-script-security` 创建锁和私有临时文件，正常退出/中断后清理临时文件；不会上传样本。
+
+安装 ClamAV 是独立修改动作，继续经过 APT 模拟、确认与外部快照声明；安装可能启动 `clamav-freshclam` 并按其配置下载病毒库，不自动扫描。超时、错误、权限不足、文件过大、加密或扫描上限都显示覆盖不完整，绝不等同于“无病毒”。命中只提供线索，不自动删除、隔离或停止服务。
+
+“逐项加固与备份恢复”复用已有 SSH 仅密钥、UFW 首次启用、Fail2ban 配置/端口刷新及历史恢复。每项重新检查并确认，不根据一次扫描批量修改。这里修复的是防护配置，不承诺清除未知植入；确认 root 入侵时，应保留证据、用可信镜像重建并轮换受影响凭据。
 
 ## 初始化向导
 
@@ -53,7 +71,7 @@ vps-script init --demo           # 演示流程，不读取真实主机
 | 主菜单 | 包含功能 | 对应只读命令 |
 | --- | --- | --- |
 | 1. 系统与软件 | APT 更新/升级/常用工具、swap、时区 | `status system`、`status packages`、`status swap`、`status timezone` |
-| 2. SSH 与安全 | SSH 端口/公钥、UFW、Fail2ban | `status ssh`、`status ufw`、`status fail2ban` |
+| 2. SSH 与安全 | SSH 端口/公钥、UFW、Fail2ban、安全体检与可选扫描 | `status ssh`、`status ufw`、`status fail2ban`、`audit` |
 | 3. 代理服务 | 3x-ui 首次安装与状态、已有 Hy2 服务的端口跳跃转发 | `status panel`、`status hy2` |
 | 4. 网络与调优 | 监听端口/实际队列、DNS 只读查看、BBR/fq、高级内核调优 | `status dns`、`status bbr`、`status tuning` |
 | 5. 诊断与测试 | 完整/分项状态报告、内置测试、独立外部测试子菜单 | `status all`、`status --json`、`doctor` |

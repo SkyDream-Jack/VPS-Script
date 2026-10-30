@@ -14,7 +14,8 @@ from vps_admin import cli, firewall, ufw_rollback
 
 
 class FakeFirewall:
-    def __init__(self):
+    def __init__(self, root=None):
+        self.root = root
         self.active = False
         self.rules = []
         self.calls = []
@@ -62,9 +63,16 @@ class FakeFirewall:
         elif name == "systemd-run":
             self.tx_dir = Path(args[-2])
         elif name == "python3":
-            rc = ufw_rollback.run(args[-2], args[-1], runner=self)
+            rc = ufw_rollback.run(args[-2], args[-1], runner=self, root=self.root)
             return subprocess.CompletedProcess(args, rc, "", "")
+        if name == "ufw" and self.root is not None and args[1] in ("allow", "delete", "--force"):
+            self.persist()
         return subprocess.CompletedProcess(args, 0, "", "")
+
+    def persist(self):
+        (self.root / "etc/ufw").mkdir(parents=True, exist_ok=True)
+        (self.root / "etc/ufw/ufw.conf").write_text("ENABLED=" + ("yes" if self.active else "no") + "\nLOGLEVEL=low\n")
+        (self.root / "etc/ufw/user.rules").write_text("\n".join(self.rules) + "\n")
 
 
 class FirewallTest(unittest.TestCase):
@@ -76,7 +84,8 @@ class FirewallTest(unittest.TestCase):
             (self.root / path).mkdir(parents=True, exist_ok=True)
         self.defaults_file = self.root / "etc/default/ufw"
         self.defaults_file.write_text('DEFAULT_INPUT_POLICY="DROP"\nDEFAULT_OUTPUT_POLICY="ACCEPT"\n', encoding="utf-8")
-        self.fake = FakeFirewall()
+        self.fake = FakeFirewall(self.root)
+        self.fake.persist()
         self.manager = firewall.FirewallManager(self.root, self.fake)
         commands = {"ufw": "/usr/sbin/ufw", "systemctl": "/usr/bin/systemctl", "systemd-run": "/usr/bin/systemd-run", "nft": "/usr/sbin/nft"}
         self.find = patch.object(firewall.checks, "find_command", side_effect=commands.get)
@@ -100,7 +109,7 @@ class FirewallTest(unittest.TestCase):
         self.assertTrue(self.fake.active)
         self.assertIn("2222/tcp", self.fake.rules)
         self.assertTrue((self.fake.tx_dir / "confirmed").exists())
-        self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake), 0)
+        self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake, root=self.root), 0)
         self.assertTrue(self.fake.active)
 
     def test_enable_rejects_non_deny_incoming_before_any_changes(self):
@@ -225,7 +234,7 @@ class FirewallTest(unittest.TestCase):
 
     def test_timeout_before_confirmation_is_not_reported_as_success(self):
         def timed_out():
-            self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake), 0)
+            self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake, root=self.root), 0)
             return True
         with self.assertRaisesRegex(firewall.FirewallFailure, "回滚已"):
             self.manager.enable(2222, timed_out)
@@ -234,7 +243,7 @@ class FirewallTest(unittest.TestCase):
     def test_external_rule_change_blocks_automatic_disable(self):
         def changed_rules():
             self.fake.rules.append("443/tcp")
-            self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake), 1)
+            self.assertEqual(ufw_rollback.run(self.fake.tx_dir, "/usr/sbin/ufw", self.fake, root=self.root), 1)
             return True
         with self.assertRaisesRegex(firewall.FirewallFailure, "回滚已"):
             self.manager.enable(2222, changed_rules)
@@ -291,12 +300,13 @@ class FirewallTest(unittest.TestCase):
         self.assertFalse(self.fake.active)
         self.assertTrue((self.fake.tx_dir / "expired").exists())
 
-    def test_failed_snapshot_cannot_be_claimed_as_automatic_recovery(self):
+    def test_failed_post_enable_snapshot_uses_durable_pre_enable_evidence(self):
         self.fake.fail_snapshot_once = True
         with self.assertRaises(firewall.FirewallFailure):
             self.manager.enable(2222, lambda: True)
-        self.assertTrue(self.fake.active)
-        self.assertFalse((self.fake.tx_dir / "rolled-back").exists())
+        self.assertFalse(self.fake.active)
+        self.assertTrue((self.fake.tx_dir / "rolled-back").exists())
+        self.assertTrue((self.fake.tx_dir / "before-enable.sha256").exists())
         self.assertFalse((self.fake.tx_dir / "confirmed").exists())
 
     def test_existing_active_ufw_is_not_changed(self):
@@ -305,6 +315,88 @@ class FirewallTest(unittest.TestCase):
         self.manager.enable(2222, lambda: True)
         self.assertEqual(self.fake.rules, [])
         self.assertFalse(any("systemd-run" in args[0] for args in self.fake.calls))
+
+    def test_pending_old_worker_blocks_noop_and_rule_changes_until_settled(self):
+        self.manager.enable(22, lambda: True)
+        old = self.fake.tx_dir
+        (old / "confirmed").unlink()
+        calls = len(self.fake.calls)
+        for change in (lambda: self.manager.enable(22, lambda: True),
+                       lambda: self.manager.allow(443, 443, "tcp"),
+                       lambda: self.manager.delete(443, 443, "tcp")):
+            with self.assertRaisesRegex(firewall.FirewallFailure, "未结束"):
+                change()
+        self.assertEqual(len(self.fake.calls), calls)
+        self.assertEqual(ufw_rollback.run(old, runner=self.fake, root=self.root), 0)
+        self.manager.enable(22, lambda: True)
+        self.assertNotEqual(old, self.fake.tx_dir)
+
+    def test_pre_enable_fingerprint_failure_prevents_enable(self):
+        original = self.manager.files._atomic_create
+        def fail(path, data, mode):
+            if path.name == "before-enable.sha256":
+                raise OSError("disk full")
+            return original(path, data, mode)
+        with patch.object(self.manager.files, "_atomic_create", side_effect=fail), self.assertRaises(OSError):
+            self.manager.enable(22, lambda: True)
+        self.assertFalse(self.fake.active)
+        self.assertFalse(any(args[1:] == ("--force", "enable") for args in self.fake.calls))
+        self.assertTrue((self.fake.tx_dir / "expired").exists())
+
+    def test_post_enable_fingerprint_write_failure_still_recovers(self):
+        original = self.manager.files._atomic_create
+        def fail(path, data, mode):
+            if path.name == "expected-status.sha256":
+                raise OSError("disk full after enable")
+            return original(path, data, mode)
+        with patch.object(self.manager.files, "_atomic_create", side_effect=fail), self.assertRaises(OSError):
+            self.manager.enable(22, lambda: True)
+        self.assertFalse(self.fake.active)
+        self.assertTrue((self.fake.tx_dir / "rolled-back").exists())
+
+    def test_both_rule_files_canonicalized_before_enable_fingerprint(self):
+        delegate = self.fake
+        def auto_rules(args, **kwargs):
+            if args[1:] in (("logging", "low"), ("--force", "enable")):
+                (self.root / "etc/ufw/user6.rules").write_text("canonical IPv6/logging rules\n")
+            return delegate(args, **kwargs)
+        self.manager.runner = auto_rules
+        self.fake.fail_snapshot_once = True
+        with self.assertRaises(firewall.FirewallFailure):
+            self.manager.enable(22, lambda: True)
+        self.assertFalse(self.fake.active)
+
+    def test_nonstandard_loglevel_blocks_before_allow(self):
+        (self.root / "etc/ufw/ufw.conf").write_text("ENABLED=no\nLOGLEVEL=invalid\n")
+        with self.assertRaisesRegex(firewall.FirewallFailure, "非标准"):
+            self.manager.enable(22, lambda: True)
+        self.assertEqual(self.fake.rules, [])
+
+    def test_fallback_recovery_refuses_later_file_drift(self):
+        self.manager.enable(22, lambda: True)
+        tx = self.fake.tx_dir
+        (tx / "confirmed").unlink()
+        (tx / "expected-status.sha256").unlink()
+        (self.root / "etc/ufw/before.rules").write_text("external change\n")
+        self.assertEqual(ufw_rollback.run(tx, runner=self.fake, root=self.root), 1)
+        self.assertTrue(self.fake.active)
+        self.assertFalse((tx / "rolled-back").exists())
+
+    def test_missing_both_evidence_files_never_disables_old_transaction(self):
+        self.manager.enable(22, lambda: True)
+        tx = self.fake.tx_dir
+        for name in ("confirmed", "before-enable.sha256", "expected-status.sha256"):
+            (tx / name).unlink()
+        self.assertEqual(ufw_rollback.run(tx, runner=self.fake, root=self.root), 1)
+        self.assertTrue(self.fake.active)
+
+    def test_legacy_status_fingerprint_remains_supported(self):
+        self.manager.enable(22, lambda: True)
+        tx = self.fake.tx_dir
+        (tx / "confirmed").unlink()
+        (tx / "before-enable.sha256").unlink()
+        self.assertEqual(ufw_rollback.run(tx, runner=self.fake, root=self.root), 0)
+        self.assertFalse(self.fake.active)
 
     def test_missing_system_python_blocks_enable(self):
         with patch.object(firewall.os.path, "isfile", return_value=False), \

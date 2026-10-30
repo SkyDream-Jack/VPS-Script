@@ -12,7 +12,7 @@ import shlex
 import stat
 import subprocess
 
-from . import backup, bbr, checks, packages
+from . import access_transactions, backup, bbr, checks, packages, ufw_rollback
 
 
 class FirewallFailure(Exception):
@@ -187,6 +187,7 @@ class FirewallManager:
     def allow(self, start, end, protocol):
         rule = port_rule(start, end, protocol)
         with self.files.locked():
+            access_transactions.require_settled(self.root, FirewallFailure)
             ufw = self.command("ufw")
             current = self.status(ufw)
             result = self.run((ufw, "allow", rule))
@@ -195,6 +196,7 @@ class FirewallManager:
     def delete(self, start, end, protocol):
         rule = port_rule(start, end, protocol)
         with self.files.locked():
+            access_transactions.require_settled(self.root, FirewallFailure)
             ufw = self.command("ufw")
             current = self.status(ufw)
             self.guard_delete(start, end, protocol, current)
@@ -215,6 +217,7 @@ class FirewallManager:
         if type(port) is not int or not 1 <= port <= 65535:
             raise FirewallFailure("SSH 端口无效")
         with self.files.locked():
+            access_transactions.require_settled(self.root, FirewallFailure)
             ufw = self.command("ufw")
             if self.status(ufw) == "active":
                 return "UFW 已处于 active；没有改变现有规则或默认策略。"
@@ -224,6 +227,15 @@ class FirewallManager:
                 raise FirewallFailure("UFW 默认入站策略不是 deny；请先设置 ufw default deny incoming，避免启用后仍然放行全部入站")
             if defaults.get("outgoing") not in ("allow", "deny"):
                 raise FirewallFailure("无法确认 UFW 默认出站策略")
+            try:
+                config = self.files._read_regular(self.root / "etc/ufw/ufw.conf").decode("ascii")
+            except (OSError, ValueError, bbr.BBRFailure) as exc:
+                raise FirewallFailure("无法安全读取 UFW 启用/日志配置") from exc
+            levels = re.findall(r"(?m)^LOGLEVEL=(off|low|medium|high|full)$", config)
+            if (re.findall(r"(?m)^ENABLED=(.*)$", config) != ["no"] or len(levels) != 1
+                    or len(re.findall(r"(?m)^\s*LOGLEVEL\s*=", config)) != 1):
+                raise FirewallFailure("UFW 静态启用/日志配置非标准；需明确 ENABLED=no 和单一有效 LOGLEVEL")
+            loglevel = levels[0]
             systemctl = self.command("systemctl")
             systemd_run = self.command("systemd-run")
             python = "/usr/bin/python3"
@@ -244,11 +256,15 @@ class FirewallManager:
             self.files._atomic_create(worker, worker_source, 0o600)
             unit = "vps-script-ufw-" + tx_dir.name
             # 先建立定时恢复，再修改防火墙。systemd-run 创建独立瞬态定时器。
-            self.run((systemd_run, "--unit=" + unit, "--on-active=180s", python, "-I", "-B", str(worker), str(tx_dir), ufw))
             timer = unit + ".timer"
-            active = self.run((systemctl, "is-active", timer), check=False)
-            if active.returncode != 0 or active.stdout.strip() != "active":
-                raise FirewallFailure("未能确认回滚定时器，未启用 UFW")
+            try:
+                self.run((systemd_run, "--unit=" + unit, "--on-active=180s", python, "-I", "-B", str(worker), str(tx_dir), ufw))
+                active = self.run((systemctl, "is-active", timer), check=False)
+                if active.returncode != 0 or active.stdout.strip() != "active":
+                    raise FirewallFailure("未能确认回滚定时器，未启用 UFW")
+            except BaseException:
+                (tx_dir / "expired").write_text("not applied\n", encoding="ascii")
+                raise
             try:
                 lock_fd = os.open(tx_dir / "lock", os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
                 try:
@@ -264,12 +280,28 @@ class FirewallManager:
                     if self.configured_defaults() != defaults:
                         raise FirewallFailure("UFW 默认策略在操作期间发生变化，未启用")
                     self.run((ufw, "allow", f"{port}/tcp"))
+                    if (self.files._read_regular(self.root / "etc/ufw/ufw.conf") != config.encode("ascii")
+                            or self.status(ufw) != "inactive"):
+                        raise FirewallFailure("UFW 启用/日志状态在操作期间发生变化，停止并保留新增 allow")
+                    # UFW start rewrites both user rule files when loading its
+                    # logging rules, even with IPv6 disabled. Canonicalize them
+                    # while inactive, keeping the current logging level.
+                    self.run((ufw, "logging", loglevel))
+                    # Persist recovery evidence before a command that can enable
+                    # filtering and then fail, time out, or lose its caller.
+                    try:
+                        fingerprint = ufw_rollback.config_fingerprint(self.root)
+                    except (OSError, ValueError) as exc:
+                        raise FirewallFailure(f"无法在启用前保存 UFW 回退依据：{exc}") from exc
+                    self.files._atomic_create(tx_dir / "before-enable.sha256", (fingerprint + "\n").encode("ascii"), 0o600)
+                    backup._fsync_directory(tx_dir)
                     (tx_dir / "enable-started").write_text("1\n", encoding="ascii")
                     self.run((ufw, "--force", "enable"), timeout=60)
                     if self.status(ufw) != "active":
                         raise FirewallFailure("启用后 UFW 状态不是 active")
                     snapshot = self.run((ufw, "status", "verbose")).stdout.encode("utf-8")
-                    (tx_dir / "expected-status.sha256").write_text(hashlib.sha256(snapshot).hexdigest() + "\n", encoding="ascii")
+                    self.files._atomic_create(tx_dir / "expected-status.sha256",
+                                              (hashlib.sha256(snapshot).hexdigest() + "\n").encode("ascii"), 0o600)
                     active_defaults = ufw_defaults(snapshot.decode("utf-8"))
                     if any(active_defaults.get(direction) != value for direction, value in defaults.items()):
                         raise FirewallFailure("启用后的 UFW 默认策略与预检不一致，正在尝试恢复")

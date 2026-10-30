@@ -33,6 +33,8 @@ class AptAction:
 
 # 包名不可由菜单输入拼接，避免未经审查的命令参数进入 root 进程。
 ACTIONS = {
+    "clamav": AptAction("安装 ClamAV 与病毒库更新工具", ("install", "clamav", "clamav-freshclam"), True,
+                         "安装可能启动 clamav-freshclam 服务，按其配置联网下载病毒库；占用内存/磁盘。不自动扫描或删除文件，软件包变化不能自动回滚。"),
     "update": AptAction("更新软件包索引", ("update",), False, "读取已有软件源并下载索引；不会更换软件源。"),
     "upgrade": AptAction("升级已安装软件包", ("upgrade",), True, "升级软件包可能重启服务或要求处理配置文件；无法保证完整回滚。"),
     "base": AptAction("安装基础工具", ("install", "ca-certificates", "curl", "wget", "git", "unzip", "tar"), True, "安装列出的软件及依赖，依赖项可能升级；软件包维护脚本以 root 执行。"),
